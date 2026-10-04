@@ -1,0 +1,13 @@
+*.exe
+*.pdb
+*.log
+*.zip
+bin/
+obj/
+HOTKEYS.txt
+status.txt
+error.txt
+windows.txt
+verification*.txt
+button-verification*.txt
+native-test*.txt
