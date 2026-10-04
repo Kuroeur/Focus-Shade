@@ -238,7 +238,7 @@ namespace FocusShade {
                 proposed.Add(new Binding { Id=id,Role=roles[i],Key=shortcuts[i] });
             }
             bool written=false;
-            try { bool wasStartup=StartupRegistration.Enabled; Preferences.Save(SettingsPath,next); written=true; if(wasStartup!=startup) StartupRegistration.Set(startup); }
+            try { Preferences.Save(SettingsPath,next); written=true; StartupRegistration.Set(startup); }
             catch(Exception ex) { foreach(int fresh in added) Native.UnregisterHotKey(button.Handle,fresh); if(written) try { Preferences.Save(SettingsPath,preferences); } catch { } return "Changes could not be saved: "+ex.Message; }
             foreach(var previous in bindings) { bool retained=false; foreach(var entry in proposed) if(entry.Id==previous.Id) retained=true; if(!retained) Native.UnregisterHotKey(button.Handle,previous.Id); }
             bindings=proposed; preferences=next.Copy(); UpdateShortcutHints();

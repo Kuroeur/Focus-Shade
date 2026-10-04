@@ -26,6 +26,16 @@ class SettingsTests {
     Preferences.Save(path,settings); settings.NormalOpacity=70; Preferences.Save(path,settings);
     Check(Preferences.Load(path).NormalOpacity==70,"atomic settings replacement persists updates");
    } finally { if(File.Exists(path)) File.Delete(path); }
+   var startup=typeof(Preferences).Assembly.GetType("FocusShade.StartupRegistration");
+   var taskXml=startup.GetMethod("TaskXml",System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.Static);
+   Check(taskXml!=null,"administrator startup has a scheduled task definition");
+   string executable=@"C:\Focus & Shade\FocusShade.exe",sid="S-1-5-21-123-456-789-1001";
+   var document=new System.Xml.XmlDocument(); document.LoadXml((string)taskXml.Invoke(null,new object[]{executable,sid}));
+   var ns=new System.Xml.XmlNamespaceManager(document.NameTable); ns.AddNamespace("t","http://schemas.microsoft.com/windows/2004/02/mit/task");
+   Check(document.SelectSingleNode("/t:Task/t:Principals/t:Principal/t:RunLevel",ns).InnerText=="HighestAvailable" && document.SelectSingleNode("/t:Task/t:Principals/t:Principal/t:LogonType",ns).InnerText=="InteractiveToken","startup requests highest privilege in the interactive user session");
+   Check(document.SelectSingleNode("/t:Task/t:Triggers/t:LogonTrigger/t:UserId",ns).InnerText==sid,"startup trigger is scoped to the current user");
+   Check(document.SelectSingleNode("/t:Task/t:Actions/t:Exec/t:Command",ns).InnerText==executable,"startup preserves and escapes the complete executable path");
+   Check(!StartupRegistration.Enabled,"missing or nonmatching startup task can be read without breaking settings");
    Console.WriteLine("TOTAL "+count+" settings checks passed"); return 0;
   } catch(Exception ex) { Console.WriteLine(ex); return 1; }
  }

@@ -54,8 +54,42 @@ namespace FocusShade {
  }
  internal static class StartupRegistration {
   const string Run="Software\\Microsoft\\Windows\\CurrentVersion\\Run",Name="FocusShade";
-  static string Command { get { return "\""+System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName+"\""; } }
-  public static bool Enabled { get { using(var key=Registry.CurrentUser.OpenSubKey(Run)) return key!=null && string.Equals(key.GetValue(Name) as string,Command,StringComparison.OrdinalIgnoreCase); } }
-  public static void Set(bool enabled) { using(var key=Registry.CurrentUser.CreateSubKey(Run)) { if(enabled) key.SetValue(Name,Command,RegistryValueKind.String); else key.DeleteValue(Name,false); } }
+  static string Executable { get { return System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName; } }
+  static string UserId { get { using(var identity=System.Security.Principal.WindowsIdentity.GetCurrent()) return identity.User.Value; } }
+  static string TaskName { get { return Name+"-"+UserId; } }
+  public static bool LegacyEnabled { get { using(var key=Registry.CurrentUser.OpenSubKey(Run)) return key!=null && string.Equals(key.GetValue(Name) as string,"\""+Executable+"\"",StringComparison.OrdinalIgnoreCase); } }
+  static void Release(object value) { if(value!=null && System.Runtime.InteropServices.Marshal.IsComObject(value)) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(value); }
+  static bool Missing(Exception ex) { return ex.HResult==unchecked((int)0x80070002); }
+  public static string TaskXml(string executable,string userId) {
+   Func<string,string> escape=System.Security.SecurityElement.Escape;
+   return "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">"
+    +"<RegistrationInfo><Description>Start FocusShade with administrator privileges for this user.</Description></RegistrationInfo>"
+    +"<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>"+escape(userId)+"</UserId></LogonTrigger></Triggers>"
+    +"<Principals><Principal id=\"Author\"><UserId>"+escape(userId)+"</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>"
+    +"<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>"
+    +"<Actions Context=\"Author\"><Exec><Command>"+escape(executable)+"</Command><WorkingDirectory>"+escape(Path.GetDirectoryName(executable))+"</WorkingDirectory></Exec></Actions></Task>";
+  }
+  public static bool Enabled {
+   get {
+    dynamic service=null,folder=null,task=null;
+    try {
+     service=Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service",true)); service.Connect(); folder=service.GetFolder("\\");
+     try { task=folder.GetTask(TaskName); } catch(Exception ex) { if(Missing(ex)) return LegacyEnabled; throw; }
+     var document=new System.Xml.XmlDocument(); document.XmlResolver=null; document.LoadXml((string)task.Xml);
+     var ns=new System.Xml.XmlNamespaceManager(document.NameTable); ns.AddNamespace("t","http://schemas.microsoft.com/windows/2004/02/mit/task");
+     var command=document.SelectSingleNode("/t:Task/t:Actions/t:Exec/t:Command",ns);
+     return (bool)task.Enabled && command!=null && string.Equals(command.InnerText,Executable,StringComparison.OrdinalIgnoreCase) || LegacyEnabled;
+    } finally { Release(task); Release(folder); Release(service); }
+   }
+  }
+  public static void Set(bool enabled) {
+   dynamic service=null,folder=null,task=null;
+   try {
+    service=Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service",true)); service.Connect(); folder=service.GetFolder("\\");
+    if(enabled) task=folder.RegisterTask(TaskName,TaskXml(Executable,UserId),6,UserId,null,3,null);
+    else try { folder.DeleteTask(TaskName,0); } catch(Exception ex) { if(!Missing(ex)) throw; }
+    if(LegacyEnabled) using(var key=Registry.CurrentUser.OpenSubKey(Run,true)) if(key!=null) key.DeleteValue(Name,false);
+   } finally { Release(task); Release(folder); Release(service); }
+  }
  }
 }
