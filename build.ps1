@@ -16,6 +16,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Application build failed' }
     }
     if ($DesktopTests) {
+        & $compiler /nologo /target:winexe /platform:x64 /main:DesktopTests /out:SettingsStartupTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs DesktopTests.cs
+        if ($LASTEXITCODE -ne 0) { throw 'Settings startup test build failed' }
         & $compiler /nologo /target:exe /platform:x64 /main:DesktopTests /out:DesktopTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs DesktopTests.cs
         if ($LASTEXITCODE -ne 0) { throw 'Desktop test build failed' }
         & ./DesktopTests.exe

@@ -18,11 +18,35 @@ internal static class DesktopTests {
  static uint Pixel(Point p) { IntPtr dc=Native.GetDC(IntPtr.Zero); try { return Native.GetPixel(dc,p.X,p.Y); } finally { Native.ReleaseDC(IntPtr.Zero,dc); } }
  [STAThread] static void Main(string[] args) {
   if(args.Length>0) {
+   if(args[0]=="--settings-startup") {
+    Application.EnableVisualStyles();
+    using(var ball=new FloatingButton()) using(var dialog=new SettingsDialog(new Preferences(),false,delegate { return null; })) using(var context=new ApplicationContext()) {
+     ball.Show();
+     ball.BeginInvoke(new Action(delegate {
+      dialog.ShowForUser(); Pump(50);
+      bool first=dialog.Visible && Native.IsWindowVisible(dialog.Handle);
+      dialog.Hide(); dialog.ShowForUser(); Pump(50);
+      bool repeat=dialog.Visible && Native.IsWindowVisible(dialog.Handle);
+      ((Button)dialog.CancelButton).PerformClick(); bool closed=dialog.IsDisposed;
+      bool reopened;
+      using(var next=new SettingsDialog(new Preferences(),false,delegate { return null; })) { next.ShowForUser(); Pump(50); reopened=next.Visible && Native.IsWindowVisible(next.Handle); }
+      Environment.ExitCode=first && repeat && closed && reopened?0:1;
+      File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"settings-startup-result.txt"),"first="+first+" repeat="+repeat+" CancelClosed="+closed+" reopened="+reopened);
+      context.ExitThread();
+     }));
+     Application.Run(context);
+    }
+    return;
+   }
    if(args[0]=="--transition") Application.Run(new Form { Text="FocusShade external transition fixture",StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(300,300,300,200),BackColor=Color.Lime });
    else Application.Run(new BlockingWindow());
    return;
   }
   try { Native.SetProcessDpiAwarenessContext(new IntPtr(-4)); Application.EnableVisualStyles();
+   using(var startup=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"SettingsStartupTests.exe"),"--settings-startup") { UseShellExecute=true,WindowStyle=System.Diagnostics.ProcessWindowStyle.Hidden })) {
+    bool ended=startup.WaitForExit(5000); if(!ended) { startup.Kill(); startup.WaitForExit(); }
+    Check(ended && startup.ExitCode==0,"Hidden-started GUI process shows Settings in managed and native state");
+   }
    using(var app=new Form { Text="FocusShade layer test",StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(300,300,500,350),BackColor=Color.Lime })
    using(var existing=new Form { Text="FocusShade original topmost test",TopMost=true,StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(850,300,300,250) })
    using(var mask=new MaskForm()) using(var button=new FloatingButton()) using(var layers=new WindowLayers()) {
@@ -129,11 +153,20 @@ internal static class DesktopTests {
      var controllerButton=(FloatingButton)controllerType.GetField("button",fields).GetValue(controller);
      var controllerLayers=(WindowLayers)controllerType.GetField("appLayers",fields).GetValue(controller);
      Check(dialog!=null && dialog.Visible && shade.Visible && Top(dialog) && controllerLayers.StackCorrect(shade.Handle,controllerButton.Handle,fixture.Handle,new HashSet<IntPtr>()),"settings window stays above active shade without foreground permission");
+     dialog.Hide(); controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
+     Check(dialog.Visible && Top(dialog),"Settings action restores the existing hidden dialog above shade");
+     dialog.WindowState=FormWindowState.Minimized; controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
+     Check(dialog.Visible && dialog.WindowState==FormWindowState.Normal,"Settings action restores a minimized dialog");
      using(var preview=new Bitmap(dialog.Width,dialog.Height)) { dialog.DrawToBitmap(preview,new Rectangle(Point.Empty,preview.Size)); preview.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"settings-preview.png")); }
      var shortcutField=(ShortcutBox)typeof(SettingsDialog).GetField("toggle",fields).GetValue(dialog);
      shortcutField.Focus(); controller.Emergency();
      controllerType.GetMethod("Hotkey",fields).Invoke(controller,new object[] { 3 });
      Check(state.Enabled,"background settings cannot swallow the global toggle shortcut");
+     ((Button)dialog.CancelButton).PerformClick(); Pump(100);
+     Check(dialog.IsDisposed && controllerType.GetField("settingsWindow",fields).GetValue(controller)==null,"Cancel disposes the modeless settings dialog and clears its reference");
+     controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
+     dialog=(SettingsDialog)controllerType.GetField("settingsWindow",fields).GetValue(controller);
+     Check(dialog!=null && dialog.Visible,"Settings can be opened again after Cancel");
      dialog.Close(); controller.Emergency();
      using(var locked=new FileStream(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"HOTKEYS.txt"),FileMode.Open,FileAccess.Read,FileShare.None)) {
       controllerType.GetMethod("UpdateShortcutHints",fields).Invoke(controller,null);

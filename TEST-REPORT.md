@@ -118,3 +118,23 @@ app.manifest 改为 requireAdministrator，UIAccess仍为false，不关闭UAC或
 管理员临时校验经用户UAC确认：注册唯一名称的测试任务（禁用登录触发，只手动运行），任务内报告实际TokenElevation=1，任务成功清理；之后恢复稳定程序及原按钮位置。没有创建用户实际自启动任务，没有执行注销或登录。稳定程序进程只读查询TokenElevation=1。
 
 用户开启遮罩并切至MSI后回复“一切正常”。这是实际管理员模式的最终集成确认。安全桌面、受保护程序、独占全屏及系统shell更新等原有限制继续存在；Win+D闪任务栏和任务视图过渡露底继续作为已接受观感限制。
+
+## Settings 窗口生命周期修复（2026-10-05）
+
+用户报告悬浮球右键与托盘 Settings 均无反应。只读真实桌面记录发现既有 Settings HWND 仍存在但不可见；无新增错误。旧 OpenSettings 对已有实例仅调用 Activate，不能重显隐藏窗口。modeless Show 下 Cancel 仅设置 DialogResult，没有显式 Close，留下窗口及引用。
+
+先添加回归检查，旧实现无法重显隐藏窗口；修复重开逻辑后 Cancel 释放检查仍失败，随后为 Cancel 增加显式 Close。现在已有窗口会先恢复最小化、Show、BringToFront/Activate，并刷新遮罩层级；已释放实例重建，对应 FormClosed 才清除引用。
+
+完整构建通过37项核心、15项设置、54项原生检查。新增原生检查验证隐藏重显、最小化恢复、Cancel释放及再次打开；设置可位于开启遮罩上方。独立只读审查未发现确定回归。全部自动桌面测试结束后恢复管理员主程序，邀请用户分别复测球右键和托盘入口；现场反馈尚待确认。自启动设置未更改。
+
+### 现场复测失败后的真正启动差异
+
+用户复测仍然无反应，因此上一轮生命周期修复不是完整解决。新主进程 Settings HWND 再次处于原生隐藏状态；同一 settings 命令也无法显示。独立 GUI 探针按主程序方式 Hidden 启动，在被动球之后显示 Settings，记录 managed=True / native=False，BringToFront与Activate后仍相同。Windows STARTUPINFO隐藏参数与首次普通窗口显示发生交互，托管Visible并不代表原生窗口已显示。
+
+新增 ShowForUser 在正常托管 Show 后核查 IsWindowVisible，必要时显式 ShowWindow(SW_SHOW)，再前置和激活。该补救仅用于用户请求的可激活设置窗口，不修改按钮或遮罩逻辑。回归使用真正独立的 Hidden GUI 子进程及 Application.Run 消息循环，验证首次打开、隐藏后重复打开、Cancel释放、新实例重开。旧行为结果exit1；修复后四项True、exit0。最终主程序入口现场复测仍待反馈。
+
+参考：https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow
+
+最终完整构建：37项核心、15项设置、55项原生检查全部通过，包括Hidden独立GUI启动回归。独立只读审查未发现确定新增回归。自动桌面测试全部结束后才恢复管理员主程序并邀请现场复测。
+
+用户最终现场复测确认“正常”：管理员主程序的悬浮球右键、托盘 Settings 及 Cancel 后重开均可用。复测期间未重启或运行桌面遮罩测试。最终主程序保持运行。

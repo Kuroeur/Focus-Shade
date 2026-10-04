@@ -221,11 +221,13 @@ namespace FocusShade {
         }
         void Toggle() { state.Enabled=!state.Enabled; SafeUpdate(); }
         void OpenSettings() {
-            if(settingsWindow!=null) { settingsWindow.Activate(); return; }
             try {
-                settingsWindow=new SettingsDialog(preferences,StartupRegistration.Enabled,SavePreferences);
-                settingsWindow.FormClosed+=delegate { settingsWindow=null; compositionPath=false; stackDirty=true; Queue(); };
-                settingsWindow.Show(); settingsWindow.Activate(); compositionPath=false; stackDirty=true; Queue();
+                if(settingsWindow==null || settingsWindow.IsDisposed) {
+                    var dialog=new SettingsDialog(preferences,StartupRegistration.Enabled,SavePreferences);
+                    settingsWindow=dialog;
+                    dialog.FormClosed+=delegate { if(settingsWindow==dialog) settingsWindow=null; compositionPath=false; stackDirty=true; Queue(); };
+                }
+                settingsWindow.ShowForUser(); compositionPath=false; stackDirty=true; Queue();
             } catch(Exception ex) { Emergency(); settingsWindow=null; MessageBox.Show("Unable to open settings: "+ex.Message,"FocusShade"); }
         }
         string SavePreferences(Preferences next,bool startup) {

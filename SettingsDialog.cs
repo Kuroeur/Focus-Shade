@@ -20,6 +20,13 @@ namespace FocusShade {
   readonly ShortcutBox toggle=new ShortcutBox(),emergency=new ShortcutBox(),exit=new ShortcutBox();
   readonly Label message=new Label { AutoSize=false,ForeColor=Color.Firebrick };
   readonly Func<Preferences,bool,string> save;
+  public void ShowForUser() {
+   if(WindowState==FormWindowState.Minimized) WindowState=FormWindowState.Normal;
+   if(!Visible) Show();
+   // Hidden startup parameters can leave managed Visible true while the HWND is hidden.
+   if(!Native.IsWindowVisible(Handle)) Native.ShowWindow(Handle,5);
+   BringToFront(); Activate();
+  }
   public bool CaptureRegisteredShortcut(Shortcut key) { foreach(var box in new ShortcutBox[] { toggle,emergency,exit }) if(box.Focused) { box.Value=key; return true; } return false; }
   public SettingsDialog(Preferences current,bool startWithWindows,Func<Preferences,bool,string> save) {
    this.save=save; Text="FocusShade Settings"; Font=new Font("Segoe UI",10); FormBorderStyle=FormBorderStyle.FixedDialog; MaximizeBox=false; MinimizeBox=false; ShowInTaskbar=true; StartPosition=FormStartPosition.CenterScreen; AutoScaleMode=AutoScaleMode.Dpi; ClientSize=new Size(440,410);
@@ -36,6 +43,7 @@ namespace FocusShade {
    message.Dock=DockStyle.Fill; layout.Controls.Add(message,0,8); layout.SetColumnSpan(message,2);
    var buttons=new FlowLayoutPanel { FlowDirection=FlowDirection.RightToLeft,Dock=DockStyle.Fill };
    var cancel=new Button { Text="Cancel",DialogResult=DialogResult.Cancel,AutoSize=true }; var apply=new Button { Text="Save",AutoSize=true };
+   cancel.Click+=delegate { Close(); };
    apply.Click+=delegate { var next=new Preferences { NormalOpacity=(int)normal.Value,DockedOpacity=(int)docked.Value,Toggle=toggle.Value,Emergency=emergency.Value,Exit=exit.Value }; string error=next.ValidationError(); if(error==null) error=this.save(next,startup.Checked); if(error!=null) { message.Text=error; return; } DialogResult=DialogResult.OK; Close(); };
    buttons.Controls.Add(cancel); buttons.Controls.Add(apply); layout.Controls.Add(buttons,0,9); layout.SetColumnSpan(buttons,2); Controls.Add(layout); AcceptButton=apply; CancelButton=cancel;
   }
