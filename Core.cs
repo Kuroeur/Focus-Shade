@@ -1,0 +1,58 @@
+using System;
+using System.Drawing;
+namespace FocusShade {
+    public enum DockEdge { None, Left, Right, Top, Bottom }
+    public static class Geometry {
+        public static Rectangle Collapsed(Rectangle full, Rectangle area, DockEdge edge, int strip) {
+            switch (edge) {
+                case DockEdge.Left: return new Rectangle(area.Left, full.Top, strip, full.Height);
+                case DockEdge.Right: return new Rectangle(area.Right-strip, full.Top, strip, full.Height);
+                case DockEdge.Top: return new Rectangle(full.Left, area.Top, full.Width, strip);
+                case DockEdge.Bottom: return new Rectangle(full.Left, area.Bottom-strip, full.Width, strip);
+                default: return full;
+            }
+        }
+        public static DockEdge Snap(Rectangle full, Rectangle area, int threshold) {
+            int[] d = { Math.Abs(full.Left-area.Left), Math.Abs(full.Right-area.Right), Math.Abs(full.Top-area.Top), Math.Abs(full.Bottom-area.Bottom) };
+            int best = 0; for (int i=1;i<4;i++) if(d[i]<d[best]) best=i;
+            return d[best]<=threshold ? (DockEdge)(best+1) : DockEdge.None;
+        }
+    }
+    public static class SwitcherPolicy {
+        public static bool MaskDuringAltTab(bool enabled) { return enabled; }
+        public static bool ForegroundShellView(string className,bool shellProcess) {
+            return shellProcess && (className=="XamlExplorerHostIslandWindow" || className=="MultitaskingViewFrame" || className=="TaskSwitcherWnd" || className=="TaskView");
+        }
+    }
+    public static class ButtonVisuals {
+        public static Region CreateRegion(Size size) {
+            using(var path=new System.Drawing.Drawing2D.GraphicsPath()) {
+                float w=Math.Max(1,size.Width),h=Math.Max(1,size.Height),d=Math.Min(w,h);
+                if(w==h) path.AddEllipse(0,0,w,h);
+                else {
+                    path.AddArc(0,0,d,d,180,90); path.AddArc(w-d,0,d,d,270,90);
+                    path.AddArc(w-d,h-d,d,d,0,90); path.AddArc(0,h-d,d,d,90,90); path.CloseFigure();
+                }
+                return new Region(path);
+            }
+        }
+        public static byte Alpha(bool collapsed) { return collapsed?(byte)153:(byte)230; }
+        public static Color Accent(uint argb) { return Color.FromArgb(255,(int)(argb>>16)&255,(int)(argb>>8)&255,(int)argb&255); }
+        public static Color Ink(Color accent) { return (accent.R*299+accent.G*587+accent.B*114)>160000?Color.FromArgb(24,24,24):Color.White; }
+    }
+    public sealed class ShadeState {
+        public bool Enabled, AltSwitch, ShellView;
+        public DateTime PendingUntil;
+        public bool Suspended(DateTime now) { return Enabled && (AltSwitch || ShellView || now<PendingUntil); }
+        public void EndAltSwitch(DateTime now) { if(!AltSwitch) return; AltSwitch=false; PendingUntil=now.AddMilliseconds(180); }
+        public void Emergency() { Enabled=false; AltSwitch=false; ShellView=false; PendingUntil=DateTime.MinValue; }
+    }
+    public sealed class DragSession {
+        public bool Active,Moved;
+        public void Start() { Active=true; Moved=false; }
+        public void Cancel() { Active=false; Moved=false; }
+    }
+    public static class Safety {
+        public static void FailOpen(Action work,Action<Exception> recover) { try { work(); } catch(Exception ex) { recover(ex); } }
+    }
+}

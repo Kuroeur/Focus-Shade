@@ -1,0 +1,73 @@
+using System;
+using System.Collections.Generic;
+namespace FocusShade {
+    // Keep visible app windows over an opaque mask. DWM then moves/resizes them
+    // in the same composition frame, without chasing their bounds with a timer.
+    internal sealed class WindowLayers : IDisposable {
+        readonly Dictionary<IntPtr,bool> original=new Dictionary<IntPtr,bool>();
+        readonly Dictionary<IntPtr,bool> restoring=new Dictionary<IntPtr,bool>();
+        readonly Dictionary<IntPtr,ulong> identities=new Dictionary<IntPtr,ulong>();
+        readonly HashSet<IntPtr> raised=new HashSet<IntPtr>();
+        public void InvalidateStack() { raised.Clear(); }
+        static ulong Identity(IntPtr h) { uint pid; uint thread=Native.GetWindowThreadProcessId(h,out pid); return ((ulong)pid<<32)|thread; }
+        public void ForgetDestroyed(IntPtr h) { original.Remove(h); restoring.Remove(h); identities.Remove(h); raised.Remove(h); }
+        void RememberOne(IntPtr h) {
+            if(original.ContainsKey(h)) return;
+            bool baseline;
+            if(restoring.TryGetValue(h,out baseline) && identities[h]==Identity(h)) { original.Add(h,baseline); restoring.Remove(h); identities.Remove(h); }
+            else { restoring.Remove(h); identities.Remove(h); original.Add(h,(Native.GetWindowLongPtr(h,-20).ToInt64()&8)!=0); }
+        }
+        public void Remember(HashSet<IntPtr> windows) { foreach(var h in windows) RememberOne(h); }
+        public bool KeepAbove(IntPtr window) { return KeepAbove(window,Native.TOPMOST); }
+        public bool KeepAbove(IntPtr window,IntPtr anchor) {
+            if(window==IntPtr.Zero || !Native.IsWindow(window)) return false;
+            RememberOne(window);
+            if(raised.Contains(window)) return true;
+            bool success=Native.SetWindowPos(window,anchor,0,0,0,0,0x4213); if(success) raised.Add(window); return success;
+        }
+        public bool Confirmed() { foreach(var h in raised) if(!Native.IsWindow(h) || (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0) return false; return true; }
+        public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target) {
+            if(!Confirmed()) return false;
+            var above=new HashSet<IntPtr>(); IntPtr h=Native.GetWindow(mask,3); int limit=512;
+            while(h!=IntPtr.Zero && limit-->0) {
+                above.Add(h);
+                if(h!=button && !original.ContainsKey(h) && Native.IsWindowVisible(h) && !Native.Cloaked(h)) return false;
+                h=Native.GetWindow(h,3);
+            }
+            foreach(var pair in original) if(Native.IsWindowVisible(pair.Key) && !above.Contains(pair.Key)) return false;
+            return above.Contains(button);
+        }
+        public void Retain(HashSet<IntPtr> windows) {
+            var remove=new List<IntPtr>(); foreach(var pair in original) if(!windows.Contains(pair.Key)) remove.Add(pair.Key);
+            foreach(var h in remove) if(!original[h]) Restore(h);
+            foreach(var h in remove) if(original.ContainsKey(h)) Restore(h);
+        }
+        void Restore(IntPtr h) {
+            bool wasTop=original[h]; original.Remove(h); raised.Remove(h);
+            // Always queue restoration, including when a preceding promotion is still pending.
+            if(Native.IsWindow(h)) { restoring[h]=wasTop; identities[h]=Identity(h); Native.SetWindowPos(h,wasTop?Native.TOPMOST:Native.NOTOPMOST,0,0,0,0,0x4213); }
+        }
+        public void Dispose() { Retain(new HashSet<IntPtr>()); }
+    }
+    internal enum ShellSurfaceKind { None, AltTab, TaskView }
+    internal struct ShellSurface { public IntPtr Window; public ShellSurfaceKind Kind; }
+    internal static class ShellWindows {
+        public static ShellSurface Inspect(IntPtr h,ShellSurfaceKind intent) {
+            if(h==IntPtr.Zero || !Native.IsWindowVisible(h) || Native.Cloaked(h)) return new ShellSurface();
+            string c=Native.Class(h); if(!SwitcherPolicy.ForegroundShellView(c,true)) return new ShellSurface();
+            uint pid; Native.GetWindowThreadProcessId(h,out pid);
+            try { using(var p=System.Diagnostics.Process.GetProcessById((int)pid)) { if(p.ProcessName!="explorer"&&p.ProcessName!="ShellExperienceHost") return new ShellSurface(); } } catch { return new ShellSurface(); }
+            string title=Native.Title(h);
+            ShellSurfaceKind kind=ShellSurfaceKind.None;
+            if(c=="TaskSwitcherWnd" || title=="任务切换" || title=="Task Switching" || title=="Task Switcher" || title=="タスクの切り替え") kind=ShellSurfaceKind.AltTab;
+            else if(c=="MultitaskingViewFrame" || c=="TaskView" || title=="任务视图" || title=="Task View" || title=="タスク ビュー") kind=ShellSurfaceKind.TaskView;
+            else kind=intent;
+            return new ShellSurface { Window=h,Kind=kind };
+        }
+        public static ShellSurface Find(ShellSurfaceKind intent) {
+            var found=Inspect(Native.GetForegroundWindow(),intent); if(found.Kind!=ShellSurfaceKind.None) return found;
+            Native.EnumWindows(delegate(IntPtr h,IntPtr p) { var candidate=Inspect(h,ShellSurfaceKind.None); if(candidate.Kind!=ShellSurfaceKind.None) { found=candidate; return false; } return true; },IntPtr.Zero);
+            return found;
+        }
+    }
+}

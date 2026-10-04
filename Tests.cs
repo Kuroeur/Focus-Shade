@@ -1,0 +1,47 @@
+using System;
+using System.Drawing;
+using FocusShade;
+class Tests {
+    static int count;
+    static void Check(bool value, string name) { if (!value) throw new Exception("FAIL: " + name); count++; Console.WriteLine("PASS: " + name); }
+    static void Main() { try { Run(); } catch (Exception ex) { Console.WriteLine(ex.Message); Environment.Exit(1); } }
+    static void Run() {
+        Rectangle area = new Rectangle(-1920, -200, 1920, 1080), full = new Rectangle(-1920, 200, 56, 56);
+        Check(Geometry.Collapsed(full, area, DockEdge.Left, 6) == new Rectangle(-1920, 200, 6, 56), "negative monitor left strip");
+        Check(Geometry.Collapsed(full, area, DockEdge.Right, 6).Right == area.Right, "right edge physical coordinates");
+        Check(Geometry.Collapsed(full, area, DockEdge.Top, 6).Top == area.Top, "top edge");
+        Check(Geometry.Collapsed(full, area, DockEdge.Bottom, 6).Bottom == area.Bottom, "bottom edge");
+        Check(Geometry.Snap(full, area, 24) == DockEdge.Left, "snap negative coordinate");
+        Check(Geometry.Snap(new Rectangle(-1000, 200, 56, 56), area, 24) == DockEdge.None, "interior stays expanded");
+        Rectangle virtualArea = Rectangle.Union(area, new Rectangle(0, 0, 2560, 1440));
+        Check(virtualArea.Left == -1920 && virtualArea.Width == 4480 && virtualArea.Top == -200, "virtual desktop union");
+        ShadeState state = new ShadeState { Enabled = true, ShellView = true };
+        Check(state.Suspended(DateTime.UtcNow), "task view remains after keys released");
+        state.ShellView = false; state.PendingUntil = DateTime.UtcNow.AddSeconds(1);
+        Check(state.Suspended(DateTime.UtcNow), "opening grace prevents early mask");
+        state.PendingUntil = DateTime.MinValue; state.AltSwitch = true;
+        Check(state.Suspended(DateTime.UtcNow), "alt tab suspension");
+        state.Emergency();
+        Check(!state.Enabled && !state.AltSwitch && !state.ShellView && !state.Suspended(DateTime.UtcNow), "emergency clears mask and suspension");
+        Check(SwitcherPolicy.ForegroundShellView("XamlExplorerHostIslandWindow",true), "Windows 11 unnamed foreground task view host");
+        Check(!SwitcherPolicy.ForegroundShellView("XamlExplorerHostIslandWindow",false), "non shell app is not task view");
+        Check(!SwitcherPolicy.ForegroundShellView("CabinetWClass",true), "ordinary Explorer remains masked");
+        var drag=new DragSession(); drag.Start(); drag.Moved=true; drag.Cancel();
+        Check(!drag.Active && !drag.Moved, "hidden or capture lost button cancels drag");
+        bool visible=true; state.Enabled=true;
+        Safety.FailOpen(delegate { throw new UnauthorizedAccessException("diagnostic write failure"); },delegate(Exception ex) { state.Emergency(); visible=false; });
+        Check(!visible && !state.Enabled, "update failure restores desktop before diagnostic logging");
+        state.Enabled=true; state.PendingUntil=DateTime.MinValue; state.EndAltSwitch(DateTime.UtcNow);
+        Check(!state.Suspended(DateTime.UtcNow), "ordinary Alt release does not expose desktop");
+        state.AltSwitch=true; state.EndAltSwitch(DateTime.UtcNow);
+        Check(!state.AltSwitch && state.Suspended(DateTime.UtcNow), "AltTab release retains only switch ending grace");
+        Check(SwitcherPolicy.MaskDuringAltTab(true), "AltTab keeps black mask outside selector");
+        Check(!SwitcherPolicy.MaskDuringAltTab(false), "disabled mask stays disabled during AltTab");
+        Check(!ButtonVisuals.CreateRegion(new Size(56,56)).IsVisible(0,0), "round button excludes rectangular corners");
+        Check(ButtonVisuals.CreateRegion(new Size(56,56)).IsVisible(28,28), "round button center hit target");
+        Check(!ButtonVisuals.CreateRegion(new Size(6,56)).IsVisible(0,0), "docked strip has rounded end");
+        Check(ButtonVisuals.CreateRegion(new Size(6,56)).IsVisible(3,28), "docked strip center hit target");
+        Check(ButtonVisuals.Alpha(false)==230 && ButtonVisuals.Alpha(true)==153, "90 and 60 percent opacity");
+        Console.WriteLine("TOTAL " + count + " passed");
+    }
+}

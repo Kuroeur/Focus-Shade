@@ -1,0 +1,13 @@
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><AssemblyName>FocusShade</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion><PlatformTarget>x64</PlatformTarget>
+    <OutputPath>bin\</OutputPath><ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System"/><Reference Include="System.Core"/>
+    <Reference Include="System.Drawing"/><Reference Include="System.Windows.Forms"/>
+    <Compile Include="Core.cs"/><Compile Include="Native.cs"/><Compile Include="WindowLayers.cs"/><Compile Include="ButtonRenderer.cs"/><Compile Include="Program.cs"/>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+</Project>
