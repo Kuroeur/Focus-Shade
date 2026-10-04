@@ -17,7 +17,11 @@ internal static class DesktopTests {
  }
  static uint Pixel(Point p) { IntPtr dc=Native.GetDC(IntPtr.Zero); try { return Native.GetPixel(dc,p.X,p.Y); } finally { Native.ReleaseDC(IntPtr.Zero,dc); } }
  [STAThread] static void Main(string[] args) {
-  if(args.Length>0) { Application.Run(new BlockingWindow()); return; }
+  if(args.Length>0) {
+   if(args[0]=="--transition") Application.Run(new Form { Text="FocusShade external transition fixture",StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(300,300,300,200),BackColor=Color.Lime });
+   else Application.Run(new BlockingWindow());
+   return;
+  }
   try { Native.SetProcessDpiAwarenessContext(new IntPtr(-4)); Application.EnableVisualStyles();
    using(var app=new Form { Text="FocusShade layer test",StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(300,300,500,350),BackColor=Color.Lime })
    using(var existing=new Form { Text="FocusShade original topmost test",TopMost=true,StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(850,300,300,250) })
@@ -37,6 +41,7 @@ internal static class DesktopTests {
     Check(Pixel(new Point(app.Left+100,app.Top+100))==0x00FF00,"cross monitor move and resize visible without mask rebuild");
     Check(Pixel(new Point(400,400))==0,"previous app location black without mask rebuild");
     Check(OpacityMatches(button,.9),"native rendered button opacity 90 percent");
+    button.SetOpacities(75,40); Pump(50); Check(OpacityMatches(button,.75),"configured normal opacity changes native button alpha"); button.SetOpacities(90,60);
     Check(button.Width==39 && button.Height==39,"button diameter reduced to 70 percent");
     using(var image=FocusShade.ButtonRenderer.Draw(button.ClientSize,button.BackColor,button.ForeColor,false,false)) {
      bool partial=false; for(int y=0;y<image.Height;y++) for(int x=0;x<image.Width;x++) { int alpha=image.GetPixel(x,y).A; if(alpha>0 && alpha<255) partial=true; }
@@ -59,9 +64,10 @@ internal static class DesktopTests {
     }
     type.GetMethod("Expand",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(button,null); Pump(100);
     Check(button.Width==39 && button.Height==39,"expanded button restores shape and opacity");
+    Rectangle preserved=button.Bounds; button.RecoverPosition(); Check(button.Bounds==preserved,"recovery preserves button position on an existing monitor");
     Pump(100); int paints=button.PaintCount; Pump(2000); Check(button.PaintCount==paints,"idle button does not repaint periodically");
-    using(var intruder=new Form { Text="FocusShade background layer test",Bounds=new Rectangle(1200,300,100,100) }) {
-     intruder.Show(); Native.SetWindowPos(intruder.Handle,Native.TOPMOST,0,0,0,0,0x13); Pump(50);
+    using(var intruder=new PassiveForm { Text="FocusShade background layer test",Bounds=new Rectangle(1200,300,100,100) }) {
+     intruder.Show(); Pump(150); intruder.Raise();
      Check(!layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"detect background window reasserting topmost");
      Check(layers.StackCorrect(mask.Handle,button.Handle,app.Handle,new HashSet<IntPtr>{intruder.Handle}),"recognized snap surface preserves app and opaque mask layers");
      mask.Raise(); layers.InvalidateStack(); layers.KeepAbove(app.Handle); layers.KeepAbove(existing.Handle); button.Raise();
@@ -89,6 +95,84 @@ internal static class DesktopTests {
      Check((Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0,"pending promotion followed by original-state restore");
     }
     if(!child.HasExited) child.Kill(); child.WaitForExit();
+   }
+   using(var fixture=new Form { Text="FocusShade transition fixture",Bounds=new Rectangle(300,300,300,200) }) {
+    fixture.Show(); fixture.Activate(); Pump(50);
+    using(var controller=new Controller(delegate { return fixture.Handle; })) {
+     var fields=BindingFlags.NonPublic|BindingFlags.Instance;
+     var controllerType=typeof(Controller);
+     var state=(ShadeState)controllerType.GetField("state",fields).GetValue(controller);
+     var shade=(MaskForm)controllerType.GetField("mask",fields).GetValue(controller);
+     state.Enabled=true;
+     controllerType.GetMethod("Update",fields).Invoke(controller,null);
+     state.PendingUntil=DateTime.UtcNow.AddSeconds(1);
+     controllerType.GetField("switchIntent",fields).SetValue(controller,ShellSurfaceKind.TaskView);
+     controllerType.GetMethod("Update",fields).Invoke(controller,null);
+     Check(!shade.Visible && state.Enabled,"task view suspends rendering without disabling shade");
+     Check(Native.GetForegroundWindow()!=shade.Handle,"task view preparation does not focus the mask");
+     controller.Emergency();
+     var tray=(NotifyIcon)controllerType.GetField("tray",fields).GetValue(controller);
+     var toggleMenu=(ToolStripMenuItem)controllerType.GetField("toggleMenu",fields).GetValue(controller);
+     Check(tray.Visible && tray.ContextMenuStrip.Items.Count==3 && tray.ContextMenuStrip.Items[1].Text=="Settings" && tray.ContextMenuStrip.Items[2].Text=="Exit","English tray menu contains all requested actions");
+     toggleMenu.PerformClick(); Check(state.Enabled && toggleMenu.Text=="Turn off","tray toggle enables shade and changes action label");
+     toggleMenu.PerformClick(); Check(!state.Enabled && toggleMenu.Text=="Turn on","tray toggle disables shade and changes action label");
+     var saved=(Preferences)controllerType.GetField("preferences",fields).GetValue(controller);
+     var conflicting=saved.Copy(); conflicting.Toggle=new FocusShade.Shortcut(7,0x75);
+     bool reserved=Native.RegisterHotKey(fixture.Handle,900,0x4007,0x75);
+     Check(reserved,"reserve shortcut conflict fixture");
+     try {
+      string error=(string)controllerType.GetMethod("SavePreferences",fields).Invoke(controller,new object[] { conflicting,false });
+      Check(error!=null && ((Preferences)controllerType.GetField("preferences",fields).GetValue(controller)).Toggle.Equals(saved.Toggle),"failed shortcut save preserves registered settings");
+     } finally { Native.UnregisterHotKey(fixture.Handle,900); }
+     state.Enabled=true; controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
+     var dialog=(SettingsDialog)controllerType.GetField("settingsWindow",fields).GetValue(controller);
+     var controllerButton=(FloatingButton)controllerType.GetField("button",fields).GetValue(controller);
+     var controllerLayers=(WindowLayers)controllerType.GetField("appLayers",fields).GetValue(controller);
+     Check(dialog!=null && dialog.Visible && shade.Visible && Top(dialog) && controllerLayers.StackCorrect(shade.Handle,controllerButton.Handle,fixture.Handle,new HashSet<IntPtr>()),"settings window stays above active shade without foreground permission");
+     using(var preview=new Bitmap(dialog.Width,dialog.Height)) { dialog.DrawToBitmap(preview,new Rectangle(Point.Empty,preview.Size)); preview.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"settings-preview.png")); }
+     var shortcutField=(ShortcutBox)typeof(SettingsDialog).GetField("toggle",fields).GetValue(dialog);
+     shortcutField.Focus(); controller.Emergency();
+     controllerType.GetMethod("Hotkey",fields).Invoke(controller,new object[] { 3 });
+     Check(state.Enabled,"background settings cannot swallow the global toggle shortcut");
+     dialog.Close(); controller.Emergency();
+     using(var locked=new FileStream(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"HOTKEYS.txt"),FileMode.Open,FileAccess.Read,FileShare.None)) {
+      controllerType.GetMethod("UpdateShortcutHints",fields).Invoke(controller,null);
+      Check(tray.Visible,"locked diagnostic hint file cannot terminate the running tool");
+     }
+    }
+   }
+   using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath,"--transition") { UseShellExecute=false,CreateNoWindow=true })) {
+    try {
+     IntPtr h=IntPtr.Zero; for(int i=0;i<100 && h==IntPtr.Zero;i++) { Pump(20); h=Native.FindWindow(null,"FocusShade external transition fixture"); }
+     Check(h!=IntPtr.Zero,"start external task view transition fixture");
+     bool denied=false;
+     using(var controller=new Controller(delegate { return Native.FindWindow(null,"FocusShade external transition fixture"); },delegate { return denied; })) {
+      var fields=BindingFlags.NonPublic|BindingFlags.Instance; var type=typeof(Controller);
+      var state=(ShadeState)type.GetField("state",fields).GetValue(controller);
+      var shade=(MaskForm)type.GetField("mask",fields).GetValue(controller);
+      state.Enabled=true; type.GetMethod("Update",fields).Invoke(controller,null); Pump(150);
+      state.PendingUntil=DateTime.UtcNow.AddSeconds(1); type.GetField("switchIntent",fields).SetValue(controller,ShellSurfaceKind.TaskView);
+      type.GetMethod("Update",fields).Invoke(controller,null);
+      var initialMonitor=Screen.FromHandle(h); var monitor=initialMonitor;
+      foreach(var candidate in Screen.AllScreens) if(candidate.DeviceName!=initialMonitor.DeviceName) { monitor=candidate; break; }
+      Native.SetWindowPos(h,IntPtr.Zero,monitor.WorkingArea.Left+300,monitor.WorkingArea.Top+300,300,200,0x4214); Pump(150);
+      state.PendingUntil=DateTime.MinValue; type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
+      type.GetMethod("Update",fields).Invoke(controller,null); Pump(100);
+      h=Native.FindWindow(null,"FocusShade external transition fixture");
+      Check(state.Enabled && shade.Visible && (Native.GetWindowLongPtr(h,-20).ToInt64()&8)!=0,"task view exit restores shading on another monitor");
+      var bounds=Native.Bounds(h);
+      Check(monitor.Bounds.Contains(bounds.Location) && (Screen.AllScreens.Length==1 || monitor.DeviceName!=initialMonitor.DeviceName),"transition fixture uses a different physical monitor when available");
+      Check(Pixel(new Point(bounds.Left+50,bounds.Top+80))==0x00FF00,"resumed external application is visible above shade");
+      var button=(FloatingButton)type.GetField("button",fields).GetValue(controller); Rectangle position=button.Bounds;
+      denied=true; type.GetField("permissionTarget",fields).SetValue(controller,IntPtr.Zero); type.GetMethod("Update",fields).Invoke(controller,null); Pump(100);
+      Check(state.Enabled && !shade.Visible && button.Visible && button.Bounds==position,"higher elevation suspends shade while preserving enabled state and button position");
+      type.GetMethod("Toggle",fields).Invoke(controller,null); type.GetMethod("Toggle",fields).Invoke(controller,null);
+      Check(state.Enabled && !shade.Visible,"toggle remains usable while higher elevation app is focused");
+      denied=false; type.GetField("permissionTarget",fields).SetValue(controller,IntPtr.Zero); type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
+      Check(state.Enabled && shade.Visible,"return to ordinary application restores enabled shade");
+      controller.Emergency(); Check(!state.Enabled && !shade.Visible,"emergency off remains available after task view resume");
+     }
+    } finally { if(!child.HasExited) child.Kill(); child.WaitForExit(); }
    }
    lines.Add("TOTAL "+count+" native checks passed");
   } catch(Exception ex) { lines.Add("ERROR "+ex); Environment.ExitCode=1; }

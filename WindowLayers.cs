@@ -56,7 +56,7 @@ namespace FocusShade {
         }
         public void Dispose() { Retain(new HashSet<IntPtr>()); }
     }
-    internal enum ShellSurfaceKind { None, AltTab, TaskView }
+    internal enum ShellSurfaceKind { None, AltTab, TaskView, SystemPanel }
     internal struct ShellSurface { public IntPtr Window; public ShellSurfaceKind Kind; }
     internal static class ShellWindows {
         public static HashSet<IntPtr> SnapBars(bool moving,HashSet<IntPtr> previous) {
@@ -74,9 +74,13 @@ namespace FocusShade {
         }
         public static ShellSurface Inspect(IntPtr h,ShellSurfaceKind intent) {
             if(h==IntPtr.Zero || !Native.IsWindowVisible(h) || Native.Cloaked(h)) return new ShellSurface();
-            string c=Native.Class(h); if(!SwitcherPolicy.ForegroundShellView(c,true)) return new ShellSurface();
+            string c=Native.Class(h);
             uint pid; Native.GetWindowThreadProcessId(h,out pid);
-            try { using(var p=System.Diagnostics.Process.GetProcessById((int)pid)) { if(p.ProcessName!="explorer"&&p.ProcessName!="ShellExperienceHost") return new ShellSurface(); } } catch { return new ShellSurface(); }
+            try { using(var p=System.Diagnostics.Process.GetProcessById((int)pid)) {
+                if(SwitcherPolicy.IsSystemPanel(c,p.ProcessName)) return new ShellSurface { Window=h,Kind=ShellSurfaceKind.SystemPanel };
+                if(p.ProcessName!="explorer"&&p.ProcessName!="ShellExperienceHost") return new ShellSurface();
+            } } catch { return new ShellSurface(); }
+            if(!SwitcherPolicy.ForegroundShellView(c,true)) return new ShellSurface();
             string title=Native.Title(h);
             ShellSurfaceKind kind=ShellSurfaceKind.None;
             if(c=="TaskSwitcherWnd" || title=="任务切换" || title=="Task Switching" || title=="Task Switcher" || title=="タスクの切り替え") kind=ShellSurfaceKind.AltTab;
@@ -84,8 +88,10 @@ namespace FocusShade {
             else kind=intent;
             return new ShellSurface { Window=h,Kind=kind };
         }
-        public static ShellSurface Find(ShellSurfaceKind intent) {
+        public static ShellSurface Find(ShellSurfaceKind intent,IntPtr previous,ShellSurfaceKind previousKind) {
             var found=Inspect(Native.GetForegroundWindow(),intent); if(found.Kind!=ShellSurfaceKind.None) return found;
+            // EnumWindows may omit immersive shell surfaces. Keep the actual known HWND through its close animation.
+            found=Inspect(previous,previousKind); if(found.Kind!=ShellSurfaceKind.None) return found;
             Native.EnumWindows(delegate(IntPtr h,IntPtr p) { var candidate=Inspect(h,ShellSurfaceKind.None); if(candidate.Kind!=ShellSurfaceKind.None) { found=candidate; return false; } return true; },IntPtr.Zero);
             return found;
         }

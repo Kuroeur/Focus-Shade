@@ -7,7 +7,7 @@
   <ItemGroup>
     <Reference Include="System"/><Reference Include="System.Core"/>
     <Reference Include="System.Drawing"/><Reference Include="System.Windows.Forms"/>
-    <Compile Include="Core.cs"/><Compile Include="Native.cs"/><Compile Include="WindowLayers.cs"/><Compile Include="ButtonRenderer.cs"/><Compile Include="Program.cs"/>
+    <Compile Include="Core.cs"/><Compile Include="Native.cs"/><Compile Include="WindowLayers.cs"/><Compile Include="ButtonRenderer.cs"/><Compile Include="Preferences.cs"/><Compile Include="SettingsDialog.cs"/><Compile Include="Program.cs"/>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
 </Project>

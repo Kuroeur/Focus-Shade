@@ -11,3 +11,5 @@ windows.txt
 verification*.txt
 button-verification*.txt
 native-test*.txt
+settings.ini
+settings.ini.*.tmp

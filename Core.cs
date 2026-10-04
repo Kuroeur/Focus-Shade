@@ -19,6 +19,10 @@ namespace FocusShade {
         }
     }
     public static class SwitcherPolicy {
+        public static bool IsSystemPanel(string className,string processName) {
+            bool host=processName=="SearchHost" || processName=="SearchApp" || processName=="SearchUI" || processName=="StartMenuExperienceHost";
+            return host && (className=="Windows.UI.Core.CoreWindow" || className=="XamlExplorerHostIslandWindow" || className=="XamlExplorerHostIslandWindow_WASDK" || className=="Windows.UI.Composition.DesktopWindowContentBridge");
+        }
         public static bool IsSnapBar(string className,string title,bool shellProcess,bool moving,Rectangle bounds,Rectangle monitor) {
             return moving && shellProcess && className=="XamlExplorerHostIslandWindow" && String.IsNullOrEmpty(title)
                 && bounds.Top==monitor.Top && bounds.Height>0 && bounds.Height<monitor.Height
@@ -59,7 +63,6 @@ namespace FocusShade {
     }
     public static class WindowEvents {
         public static bool IsWindowObject(int obj,int child) { return obj==0 && child==0; }
-        public static int RecheckInterval(DateTime now,DateTime transitionUntil) { return now<transitionUntil?16:750; }
     }
     public static class Safety {
         public static void FailOpen(Action work,Action<Exception> recover) { try { work(); } catch(Exception ex) { recover(ex); } }

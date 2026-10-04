@@ -51,9 +51,10 @@ class Tests {
         Check(WindowEvents.IsWindowObject(0,0),"top level window destruction may clear layer baseline");
         Check(!WindowEvents.IsWindowObject(-4,1),"client object destruction does not clear window baseline");
         Check(!WindowEvents.IsWindowObject(0,1),"child object destruction does not clear window baseline");
-        DateTime now=DateTime.UtcNow;
-        Check(WindowEvents.RecheckInterval(now,now.AddSeconds(1))==16,"show desktop transition checks layers promptly");
-        Check(WindowEvents.RecheckInterval(now,now.AddSeconds(-1))==750,"transition polling stops automatically");
+        Check(SwitcherPolicy.IsSystemPanel("Windows.UI.Core.CoreWindow","SearchHost"),"Windows Search is a system panel rather than a promoted app");
+        Check(SwitcherPolicy.IsSystemPanel("Windows.UI.Core.CoreWindow","StartMenuExperienceHost"),"Start menu is a system panel rather than a promoted app");
+        Check(!SwitcherPolicy.IsSystemPanel("Windows.UI.Core.CoreWindow","ordinary-app"),"ordinary CoreWindow is not exempted from application layers");
+        Check(!SwitcherPolicy.IsSystemPanel("XamlExplorerHostIslandWindow_WASDK","explorer"),"empty taskbar proxy is not a Start or Search panel");
         Console.WriteLine("TOTAL " + count + " passed");
     }
 }

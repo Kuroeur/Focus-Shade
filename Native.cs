@@ -27,7 +27,20 @@ namespace FocusShade {
         public static string Class(IntPtr h) { var b=new StringBuilder(256); GetClassName(h,b,b.Capacity); return b.ToString(); }
         public static string Title(IntPtr h) { var b=new StringBuilder(256); GetWindowText(h,b,b.Capacity); return b.ToString(); }
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
-        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int height,uint flags);
+        [DllImport("user32.dll",SetLastError=true)] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int height,uint flags);
+        [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+        [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+        [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int type,out int value,int size,out int needed);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+        static bool Elevated(uint pid) {
+            IntPtr process=OpenProcess(0x1000,false,pid),token=IntPtr.Zero;
+            try { int value,needed; return process!=IntPtr.Zero && OpenProcessToken(process,8,out token) && GetTokenInformation(token,20,out value,4,out needed) && value!=0; }
+            finally { if(token!=IntPtr.Zero) CloseHandle(token); if(process!=IntPtr.Zero) CloseHandle(process); }
+        }
+        public static bool HigherElevation(IntPtr window) {
+            uint pid; GetWindowThreadProcessId(window,out pid);
+            return pid!=0 && Elevated(pid) && !Elevated((uint)System.Diagnostics.Process.GetCurrentProcess().Id);
+        }
         [StructLayout(LayoutKind.Sequential)] public struct XY { public int X,Y; public XY(int x,int y) { X=x; Y=y; } }
         [StructLayout(LayoutKind.Sequential,Pack=1)] public struct Blend { public byte Op,Flags,Alpha,Format; }
         [DllImport("user32.dll",SetLastError=true)] public static extern bool UpdateLayeredWindow(IntPtr h,IntPtr screen,ref XY position,ref XY size,IntPtr source,ref XY origin,uint key,ref Blend blend,uint flags);
@@ -54,6 +67,7 @@ namespace FocusShade {
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetModuleHandle(string name);
         [DllImport("user32.dll",SetLastError=true)] public static extern bool RegisterHotKey(IntPtr h,int id,uint mod,uint key);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h,int id);
+        [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr icon);
         [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
         [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
         [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h,int attr,out Rect r,int size);
@@ -62,7 +76,7 @@ namespace FocusShade {
         [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h);
         [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool GetUserObjectInformation(IntPtr h,int index,StringBuilder b,int size,out int needed);
         public static bool Cloaked(IntPtr h) { int c; return DwmInt(h,14,out c,4)==0 && c!=0; }
-        public static Rectangle Bounds(IntPtr h) { Rect r; if(DwmGetWindowAttribute(h,9,out r,16)==0) return r.Rectangle; return GetWindowRect(h,out r)?r.Rectangle:Rectangle.Empty; }
+        public static Rectangle Bounds(IntPtr h) { Rect r; if(DwmGetWindowAttribute(h,9,out r,16)==0 && r.Right>r.Left && r.Bottom>r.Top) return r.Rectangle; return GetWindowRect(h,out r)?r.Rectangle:Rectangle.Empty; }
         public static bool InputDesktopAvailable() { IntPtr h=OpenInputDesktop(0,false,1); if(h==IntPtr.Zero) return false; try { int n; var b=new StringBuilder(256); return GetUserObjectInformation(h,2,b,512,out n)&&b.ToString()=="Default"; } finally { CloseDesktop(h); } }
     }
 }
