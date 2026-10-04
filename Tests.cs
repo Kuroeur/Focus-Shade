@@ -48,6 +48,12 @@ class Tests {
         Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",true,false,bar,monitor),"unrelated shell host outside drag is not snap bar");
         Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",true,true,monitor,monitor),"full screen shell host is not top snap bar");
         Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","Task View",true,true,bar,monitor),"task view is not snap bar");
+        Check(WindowEvents.IsWindowObject(0,0),"top level window destruction may clear layer baseline");
+        Check(!WindowEvents.IsWindowObject(-4,1),"client object destruction does not clear window baseline");
+        Check(!WindowEvents.IsWindowObject(0,1),"child object destruction does not clear window baseline");
+        DateTime now=DateTime.UtcNow;
+        Check(WindowEvents.RecheckInterval(now,now.AddSeconds(1))==16,"show desktop transition checks layers promptly");
+        Check(WindowEvents.RecheckInterval(now,now.AddSeconds(-1))==750,"transition polling stops automatically");
         Console.WriteLine("TOTAL " + count + " passed");
     }
 }

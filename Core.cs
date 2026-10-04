@@ -57,6 +57,10 @@ namespace FocusShade {
         public void Start() { Active=true; Moved=false; }
         public void Cancel() { Active=false; Moved=false; }
     }
+    public static class WindowEvents {
+        public static bool IsWindowObject(int obj,int child) { return obj==0 && child==0; }
+        public static int RecheckInterval(DateTime now,DateTime transitionUntil) { return now<transitionUntil?16:750; }
+    }
     public static class Safety {
         public static void FailOpen(Action work,Action<Exception> recover) { try { work(); } catch(Exception ex) { recover(ex); } }
     }

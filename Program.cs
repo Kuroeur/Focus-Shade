@@ -55,16 +55,18 @@ namespace FocusShade {
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle|=Native.NOACTIVATE|Native.TOOLWINDOW|8; return p; } }
         protected override void WndProc(ref Message m) { if(m.Msg==0x21) { m.Result=new IntPtr(3); return; } base.WndProc(ref m); }
-        public void Raise() { Native.SetWindowPos(Handle,Native.TOPMOST,0,0,0,0,0x13); }
+        public void Raise() { if(Native.IsIconic(Handle)) Native.ShowWindow(Handle,4); Native.SetWindowPos(Handle,Native.TOPMOST,0,0,0,0,0x13); }
     }
     internal sealed class MaskForm : PassiveForm {
         public MaskForm() { Text="FocusShade Black Mask"; BackColor=Color.Black; }
         protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle|=Native.LAYERED; return p; } }
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Native.SetLayeredWindowAttributes(Handle,0,255,2); }
         public void Apply(Rectangle desktop,bool raise) {
+            if(Native.IsIconic(Handle)) Native.ShowWindow(Handle,4);
             if(Bounds!=desktop) Bounds=desktop;
             if(!Visible) Show(); if(raise) Raise();
         }
+        public void CoverDesktop(Rectangle desktop,FloatingButton button) { button.Raise(); Apply(desktop,false); if(!PlaceBelow(button.Handle)) throw new InvalidOperationException("无法恢复桌面遮罩层级"); }
         public bool PlaceBelow(IntPtr window) { return Native.SetWindowPos(Handle,window,0,0,0,0,0x213); }
     }
     internal sealed class FloatingButton : PassiveForm {
@@ -145,7 +147,7 @@ namespace FocusShade {
         readonly ShadeState state=new ShadeState(); readonly List<IntPtr> hooks=new List<IntPtr>();
         readonly WindowLayers appLayers=new WindowLayers();
         readonly List<MaskForm> taskbarMasks=new List<MaskForm>(); DateTime promotionStarted;
-        bool moving; HashSet<IntPtr> snapBars=new HashSet<IntPtr>();
+        DateTime desktopTransitionUntil; bool moving; HashSet<IntPtr> snapBars=new HashSet<IntPtr>();
         Native.WinEvent eventProc; Native.KeyProc keyProc; IntPtr keyboard;
         readonly System.Windows.Forms.Timer checkTimer=new System.Windows.Forms.Timer { Interval=750 };
         readonly System.Windows.Forms.Timer updateTimer=new System.Windows.Forms.Timer { Interval=16 };
@@ -167,7 +169,7 @@ namespace FocusShade {
             File.WriteAllText(Path.Combine(directory,"HOTKEYS.txt"),"紧急解除遮罩："+emergencyKey+Environment.NewLine+"完全退出："+exitKey);
             HotkeyFilter filter=new HotkeyFilter(this); Application.AddMessageFilter(filter); hotkeyFilter=filter;
             eventProc=OnEvent; keyProc=OnKey;
-            Hook(3,0x17); Hook(0x8000,0x8003); Hook(0x800B,0x800B); Hook(0x8017,0x8018);
+            Hook(3,0x17); Hook(0x8000,0x8004); Hook(0x800B,0x800B); Hook(0x8017,0x8018);
             keyboard=Native.SetWindowsHookEx(13,keyProc,Native.GetModuleHandle(null),0);
             if(keyboard==IntPtr.Zero) throw new InvalidOperationException("无法安装切换键监听");
             updateTimer.Tick+=delegate { updateTimer.Stop(); queued=false; SafeUpdate(); };
@@ -189,16 +191,21 @@ namespace FocusShade {
         void Queue() { if(disposed || queued) return; queued=true; updateTimer.Start(); }
         void OnEvent(IntPtr hook,uint ev,IntPtr hwnd,int obj,int child,uint thread,uint time) {
             if(disposed) return;
-            if(ev==0x8001) { appLayers.ForgetDestroyed(hwnd); snapBars.Remove(hwnd); }
+            if(ev==0x8001 && WindowEvents.IsWindowObject(obj,child)) { appLayers.ForgetDestroyed(hwnd); snapBars.Remove(hwnd); }
             if(ev==0xA) moving=true;
             if(ev==0xB) moving=false;
             if(ev==0x8002 && Native.Class(hwnd)=="XamlExplorerHostIslandWindow") snapBars=ShellWindows.SnapBars(moving,snapBars);
-            if(ev==0x8003) snapBars.Remove(hwnd);
+            if(ev==0x8003 && WindowEvents.IsWindowObject(obj,child)) snapBars.Remove(hwnd);
+            if(ev==0x16 || ev==0x17) { desktopTransitionUntil=DateTime.UtcNow.AddMilliseconds(1500); if(ev==0x17) appLayers.WindowRestored(hwnd); }
+            bool desktopReorder=ev==0x8004 && child==0 && Native.Class(hwnd)=="#32769";
+            if(ev==0x8004 && !desktopReorder && !WindowEvents.IsWindowObject(obj,child)) return;
+            if(ev==0x8004) appLayers.InvalidateStack();
+            if(ev==0x8018 && WindowEvents.IsWindowObject(obj,child)) appLayers.WindowRestored(hwnd);
             if(ev==0x14 && switchIntent!=ShellSurfaceKind.TaskView) { switchIntent=ShellSurfaceKind.AltTab; state.AltSwitch=true; BeginAltTab(); }
             if(ev==0x15) { state.AltSwitch=false; state.PendingUntil=DateTime.UtcNow.AddMilliseconds(180); }
             if(ev==0x800B && hwnd!=target && Native.GetAncestor(hwnd,3)!=Native.GetAncestor(target,3)) return;
             if(ev==0x800B && compositionPath && hwnd==target) return; // DWM owns live movement/resize.
-            if(obj!=0 && ev>=0x8000) return; Queue();
+            if(obj!=0 && ev>=0x8000 && !desktopReorder) return; Queue();
             if(ev!=0x800B) stackDirty=true;
         }
         IntPtr OnKey(int code,IntPtr wp,IntPtr lp) {
@@ -206,6 +213,7 @@ namespace FocusShade {
                 if(code>=0) {
                     var k=(Native.KeyData)Marshal.PtrToStructure(lp,typeof(Native.KeyData));
                     bool down=wp.ToInt32()==0x100 || wp.ToInt32()==0x104;
+                    if(down && k.Key==0x44 && (Native.GetAsyncKeyState(0x5B)<0 || Native.GetAsyncKeyState(0x5C)<0)) { desktopTransitionUntil=DateTime.UtcNow.AddMilliseconds(1500); checkTimer.Interval=16; Queue(); }
                     if(down && k.Key==9) {
                         bool alt=(k.Flags&0x20)!=0 || Native.GetAsyncKeyState(0x12)<0;
                         bool win=Native.GetAsyncKeyState(0x5B)<0 || Native.GetAsyncKeyState(0x5C)<0;
@@ -252,7 +260,7 @@ namespace FocusShade {
                 }
                 if(state.Enabled && state.ShellView) ShowTaskbarMasks(); else HideTaskbarMasks();
             } else {
-                HideTaskbarMasks(); switchIntent=ShellSurfaceKind.None; currentSelector=IntPtr.Zero; checkTimer.Interval=750;
+                HideTaskbarMasks(); switchIntent=ShellSurfaceKind.None; currentSelector=IntPtr.Zero; checkTimer.Interval=WindowEvents.RecheckInterval(DateTime.UtcNow,desktopTransitionUntil);
                 uint pid=0; if(foreground!=IntPtr.Zero) Native.GetWindowThreadProcessId(foreground,out pid);
                 if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
                 bool buttonHidden=!button.Visible; if(buttonHidden) button.Show(); button.Active=state.Enabled;
@@ -272,14 +280,14 @@ namespace FocusShade {
                         }
                         appLayers.Retain(visible); appLayers.Remember(visible);
                         if(changed || reorder) {
-                            mask.Apply(desktop,false); mask.PlaceBelow(button.Handle); lastRegion="composition|"+desktop;
+                            mask.CoverDesktop(desktop,button); lastRegion="composition|"+desktop;
                             appLayers.InvalidateStack(); if(changed || compositionPath) promotionStarted=DateTime.UtcNow;
                         }
                         bool success=true;
                         foreach(var h in visible) if(!appLayers.KeepAbove(h,button.Handle)) success=false;
                         layerTarget=target; compositionPath=success && appLayers.StackCorrect(mask.Handle,button.Handle,target,snapBars);
                         maskMode=compositionPath?"composition":"waiting-for-layer";
-                        if(!success || !compositionPath && DateTime.UtcNow>promotionStarted.AddSeconds(1)) throw new InvalidOperationException("应用窗口未能进入遮罩上方，已解除遮罩");
+                        if(!success || !compositionPath && DateTime.UtcNow>promotionStarted.AddSeconds(1)) throw new InvalidOperationException("应用窗口未能进入遮罩上方，已解除遮罩："+appLayers.Problem);
                         if(!compositionPath) Queue();
                     }
                 }

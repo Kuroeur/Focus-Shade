@@ -45,6 +45,9 @@ internal static class DesktopTests {
     mask.Raise(); button.Raise(); Check(!layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"topmost flag alone cannot confirm target above mask");
     layers.InvalidateStack(); layers.KeepAbove(app.Handle,button.Handle); layers.KeepAbove(existing.Handle,button.Handle);
     Check(layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"actual application and button order confirmed");
+    Native.SetWindowPos(app.Handle,Native.NOTOPMOST,0,0,0,0,0x13);
+    layers.KeepAbove(app.Handle,button.Handle); Pump(50);
+    Check(layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"late window restore invalidates formerly successful promotion cache");
     var type=typeof(FloatingButton); type.GetField("edge",BindingFlags.NonPublic|BindingFlags.Instance).SetValue(button,DockEdge.Top);
     type.GetField("area",BindingFlags.NonPublic|BindingFlags.Instance).SetValue(button,Screen.PrimaryScreen.WorkingArea);
     type.GetMethod("Collapse",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(button,null); Pump(100);
@@ -64,7 +67,16 @@ internal static class DesktopTests {
      mask.Raise(); layers.InvalidateStack(); layers.KeepAbove(app.Handle); layers.KeepAbove(existing.Handle); button.Raise();
      Check(layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"repair background topmost ordering");
     }
-    layers.Dispose(); Check(!Top(app)&&Top(existing),"restore ordinary and originally topmost windows"); mask.Hide();
+    layers.Dispose(); Check(!Top(app)&&Top(existing),"restore ordinary and originally topmost windows");
+    Native.SetWindowPos(existing.Handle,Native.TOPMOST,0,0,0,0,0x13);
+    using(var desktopLayers=new WindowLayers()) {
+     mask.CoverDesktop(SystemInformation.VirtualScreen,button);
+     Check(desktopLayers.StackCorrect(mask.Handle,button.Handle,IntPtr.Zero),"show desktop taskbar reassertion keeps mask and button above background");
+     Native.ShowWindow(button.Handle,7); Native.ShowWindow(mask.Handle,7); Pump(50);
+     mask.CoverDesktop(SystemInformation.VirtualScreen,button); Pump(50);
+     Check(!Native.IsIconic(button.Handle) && !Native.IsIconic(mask.Handle) && desktopLayers.StackCorrect(mask.Handle,button.Handle,IntPtr.Zero),"show desktop minimized tool surfaces restored without activation");
+    }
+    mask.Hide();
    }
    using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath,"--blocked") { UseShellExecute=false,CreateNoWindow=true })) {
     IntPtr h=IntPtr.Zero; for(int i=0;i<100 && h==IntPtr.Zero;i++) { Pump(20); h=Native.FindWindow(null,"FocusShade blocked fixture"); }

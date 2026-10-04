@@ -8,9 +8,11 @@ namespace FocusShade {
         readonly Dictionary<IntPtr,bool> restoring=new Dictionary<IntPtr,bool>();
         readonly Dictionary<IntPtr,ulong> identities=new Dictionary<IntPtr,ulong>();
         readonly HashSet<IntPtr> raised=new HashSet<IntPtr>();
-        public void InvalidateStack() { raised.Clear(); }
+        readonly HashSet<IntPtr> settled=new HashSet<IntPtr>();
+        public void InvalidateStack() { raised.Clear(); settled.Clear(); }
+        public void WindowRestored(IntPtr h) { raised.Remove(h); settled.Remove(h); }
         static ulong Identity(IntPtr h) { uint pid; uint thread=Native.GetWindowThreadProcessId(h,out pid); return ((ulong)pid<<32)|thread; }
-        public void ForgetDestroyed(IntPtr h) { original.Remove(h); restoring.Remove(h); identities.Remove(h); raised.Remove(h); }
+        public void ForgetDestroyed(IntPtr h) { original.Remove(h); restoring.Remove(h); identities.Remove(h); raised.Remove(h); settled.Remove(h); }
         void RememberOne(IntPtr h) {
             if(original.ContainsKey(h)) return;
             bool baseline;
@@ -22,21 +24,25 @@ namespace FocusShade {
         public bool KeepAbove(IntPtr window,IntPtr anchor) {
             if(window==IntPtr.Zero || !Native.IsWindow(window)) return false;
             RememberOne(window);
-            if(raised.Contains(window)) return true;
+            if(raised.Contains(window)) {
+                if(!settled.Contains(window) || (Native.GetWindowLongPtr(window,-20).ToInt64()&8)!=0) return true;
+                WindowRestored(window);
+            }
             bool success=Native.SetWindowPos(window,anchor,0,0,0,0,0x4213); if(success) raised.Add(window); return success;
         }
-        public bool Confirmed() { foreach(var h in raised) if(!Native.IsWindow(h) || (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0) return false; return true; }
+        public string Problem="";
+        public bool Confirmed() { bool success=true; foreach(var h in raised) { if(!Native.IsWindow(h) || (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0) success=false; else settled.Add(h); } return success; }
         public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target) { return StackCorrect(mask,button,target,new HashSet<IntPtr>()); }
         public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target,HashSet<IntPtr> shellSurfaces) {
-            if(!Confirmed()) return false;
+            Problem=""; if(!Confirmed()) { Problem="promotion not confirmed"; return false; }
             var above=new HashSet<IntPtr>(); IntPtr h=Native.GetWindow(mask,3); int limit=512;
             while(h!=IntPtr.Zero && limit-->0) {
                 above.Add(h);
-                if(h!=button && !original.ContainsKey(h) && !shellSurfaces.Contains(h) && Native.IsWindowVisible(h) && !Native.Cloaked(h)) return false;
+                if(h!=button && !original.ContainsKey(h) && !shellSurfaces.Contains(h) && Native.IsWindowVisible(h) && !Native.Cloaked(h)) { Problem="unexpected-above-mask="+h+" class="+Native.Class(h); return false; }
                 h=Native.GetWindow(h,3);
             }
-            foreach(var pair in original) if(Native.IsWindowVisible(pair.Key) && !above.Contains(pair.Key)) return false;
-            return above.Contains(button);
+            foreach(var pair in original) if(Native.IsWindowVisible(pair.Key) && !above.Contains(pair.Key)) { Problem="app-below-mask="+pair.Key+" class="+Native.Class(pair.Key); return false; }
+            if(!above.Contains(button)) { Problem="button-below-mask"; return false; } return true;
         }
         public void Retain(HashSet<IntPtr> windows) {
             var remove=new List<IntPtr>(); foreach(var pair in original) if(!windows.Contains(pair.Key)) remove.Add(pair.Key);
@@ -44,7 +50,7 @@ namespace FocusShade {
             foreach(var h in remove) if(original.ContainsKey(h)) Restore(h);
         }
         void Restore(IntPtr h) {
-            bool wasTop=original[h]; original.Remove(h); raised.Remove(h);
+            bool wasTop=original[h]; original.Remove(h); raised.Remove(h); settled.Remove(h);
             // Always queue restoration, including when a preceding promotion is still pending.
             if(Native.IsWindow(h)) { restoring[h]=wasTop; identities[h]=Identity(h); Native.SetWindowPos(h,wasTop?Native.TOPMOST:Native.NOTOPMOST,0,0,0,0,0x4213); }
         }
@@ -55,6 +61,7 @@ namespace FocusShade {
     internal static class ShellWindows {
         public static HashSet<IntPtr> SnapBars(bool moving,HashSet<IntPtr> previous) {
             var found=new HashSet<IntPtr>();
+            if(!moving && previous.Count==0) return found;
             Native.EnumWindows(delegate(IntPtr h,IntPtr data) {
                 if(!Native.IsWindowVisible(h) || Native.Cloaked(h) || Native.Class(h)!="XamlExplorerHostIslandWindow") return true;
                 uint pid; Native.GetWindowThreadProcessId(h,out pid); bool shell=false;
