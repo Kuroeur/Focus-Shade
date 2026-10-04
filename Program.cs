@@ -145,6 +145,7 @@ namespace FocusShade {
         readonly ShadeState state=new ShadeState(); readonly List<IntPtr> hooks=new List<IntPtr>();
         readonly WindowLayers appLayers=new WindowLayers();
         readonly List<MaskForm> taskbarMasks=new List<MaskForm>(); DateTime promotionStarted;
+        bool moving; HashSet<IntPtr> snapBars=new HashSet<IntPtr>();
         Native.WinEvent eventProc; Native.KeyProc keyProc; IntPtr keyboard;
         readonly System.Windows.Forms.Timer checkTimer=new System.Windows.Forms.Timer { Interval=750 };
         readonly System.Windows.Forms.Timer updateTimer=new System.Windows.Forms.Timer { Interval=16 };
@@ -188,7 +189,11 @@ namespace FocusShade {
         void Queue() { if(disposed || queued) return; queued=true; updateTimer.Start(); }
         void OnEvent(IntPtr hook,uint ev,IntPtr hwnd,int obj,int child,uint thread,uint time) {
             if(disposed) return;
-            if(ev==0x8001) appLayers.ForgetDestroyed(hwnd);
+            if(ev==0x8001) { appLayers.ForgetDestroyed(hwnd); snapBars.Remove(hwnd); }
+            if(ev==0xA) moving=true;
+            if(ev==0xB) moving=false;
+            if(ev==0x8002 && Native.Class(hwnd)=="XamlExplorerHostIslandWindow") snapBars=ShellWindows.SnapBars(moving,snapBars);
+            if(ev==0x8003) snapBars.Remove(hwnd);
             if(ev==0x14 && switchIntent!=ShellSurfaceKind.TaskView) { switchIntent=ShellSurfaceKind.AltTab; state.AltSwitch=true; BeginAltTab(); }
             if(ev==0x15) { state.AltSwitch=false; state.PendingUntil=DateTime.UtcNow.AddMilliseconds(180); }
             if(ev==0x800B && hwnd!=target && Native.GetAncestor(hwnd,3)!=Native.GetAncestor(target,3)) return;
@@ -229,6 +234,7 @@ namespace FocusShade {
         void SafeUpdate() { Safety.FailOpen(Update,delegate(Exception ex) { state.Emergency(); appLayers.Dispose(); compositionPath=false; HideTaskbarMasks(); mask.Hide(); button.RecoverPosition(); button.Show(); try { File.AppendAllText(Path.Combine(directory,"error.txt"),DateTime.Now+" "+ex+Environment.NewLine); } catch { } }); }
         void Update() {
             if(disposed) return;
+            snapBars=ShellWindows.SnapBars(moving,snapBars);
             ShellSurface surface=ShellWindows.Find(switchIntent);
             state.ShellView=surface.Kind==ShellSurfaceKind.TaskView;
             if(surface.Kind!=ShellSurfaceKind.None) state.PendingUntil=DateTime.MinValue;
@@ -248,16 +254,16 @@ namespace FocusShade {
             } else {
                 HideTaskbarMasks(); switchIntent=ShellSurfaceKind.None; currentSelector=IntPtr.Zero; checkTimer.Interval=750;
                 uint pid=0; if(foreground!=IntPtr.Zero) Native.GetWindowThreadProcessId(foreground,out pid);
-                if(foreground!=IntPtr.Zero && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
+                if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
                 bool buttonHidden=!button.Visible; if(buttonHidden) button.Show(); button.Active=state.Enabled;
                 if(!state.Enabled) {
                     maskMode="off"; appLayers.Dispose(); compositionPath=false; layerTarget=IntPtr.Zero; mask.Hide(); lastRegion="";
                     if(buttonHidden || stackDirty) button.Raise();
                 } else {
                     Rectangle desktop=SystemInformation.VirtualScreen;
-                    if(compositionPath && !appLayers.StackCorrect(mask.Handle,button.Handle,target)) stackDirty=true;
+                    if(compositionPath && !appLayers.StackCorrect(mask.Handle,button.Handle,target,snapBars)) stackDirty=true;
                     bool changed=layerTarget!=target || !mask.Visible || lastRegion!="composition|"+desktop;
-                    bool reorder=changed || stackDirty && !appLayers.StackCorrect(mask.Handle,button.Handle,target);
+                    bool reorder=changed || stackDirty && !appLayers.StackCorrect(mask.Handle,button.Handle,target,snapBars);
                     if(reorder || !compositionPath) {
                         var visible=new HashSet<IntPtr>();
                         if(AppWindow(target)) {
@@ -271,7 +277,7 @@ namespace FocusShade {
                         }
                         bool success=true;
                         foreach(var h in visible) if(!appLayers.KeepAbove(h,button.Handle)) success=false;
-                        layerTarget=target; compositionPath=success && appLayers.StackCorrect(mask.Handle,button.Handle,target);
+                        layerTarget=target; compositionPath=success && appLayers.StackCorrect(mask.Handle,button.Handle,target,snapBars);
                         maskMode=compositionPath?"composition":"waiting-for-layer";
                         if(!success || !compositionPath && DateTime.UtcNow>promotionStarted.AddSeconds(1)) throw new InvalidOperationException("应用窗口未能进入遮罩上方，已解除遮罩");
                         if(!compositionPath) Queue();
@@ -288,7 +294,7 @@ namespace FocusShade {
             for(int i=0;i<taskbarMasks.Count;i++) { if(i<rectangles.Count) { if(!taskbarMasks[i].Visible || taskbarMasks[i].Bounds!=rectangles[i]) taskbarMasks[i].Apply(rectangles[i],true); } else taskbarMasks[i].Hide(); }
         }
         void WriteStatus(bool suspended,IntPtr foreground) {
-            string text="mode="+maskMode+" composition="+compositionPath+" selector="+currentSelector+" enabled="+state.Enabled+" suspended="+suspended+" shellView="+state.ShellView+" altSwitch="+state.AltSwitch+" mask="+mask.Visible+" button="+button.Visible+" target="+target+" foreground="+foreground+" targetClass="+Native.Class(target)+" targetBounds="+Native.Bounds(target)+" buttonBounds="+button.Bounds+" paints="+button.PaintCount+" dock="+button.DockStatus+" monitors="+Screen.AllScreens.Length+" emergency="+emergencyKey+" exit="+exitKey;
+            string text="mode="+maskMode+" snapBars="+snapBars.Count+" moving="+moving+" composition="+compositionPath+" selector="+currentSelector+" enabled="+state.Enabled+" suspended="+suspended+" shellView="+state.ShellView+" altSwitch="+state.AltSwitch+" mask="+mask.Visible+" button="+button.Visible+" target="+target+" foreground="+foreground+" targetClass="+Native.Class(target)+" targetBounds="+Native.Bounds(target)+" buttonBounds="+button.Bounds+" paints="+button.PaintCount+" dock="+button.DockStatus+" monitors="+Screen.AllScreens.Length+" emergency="+emergencyKey+" exit="+exitKey;
             if(text==lastStatus) return; lastStatus=text;
             try { File.WriteAllText(Path.Combine(directory,"status.txt"),text); File.AppendAllText(Path.Combine(directory,"events.log"),DateTime.Now.ToString("O")+" "+text+Environment.NewLine); } catch(IOException) { } catch(UnauthorizedAccessException) { }
         }

@@ -11,3 +11,5 @@ Alt+Tab使用实际shell HWND作为遮罩插入位置。Windows 11的宿主边�
 限制：强制终止和权限/受保护窗口可能妨碍置顶恢复；多个进程持续抢层级无完整保证。安全桌面、独占全屏和shell更新不承诺支持。性能架构消除了位置追踪轮询，但尚无60/144/240Hz逐帧测量。
 
 遮罩不使用WS_EX_TRANSPARENT，黑区拦截鼠标；保留NOACTIVATE与原生置顶样式，避免WinForms托管TopMost触发隐式焦点。
+
+顶部分屏栏：监听MOVESIZESTART/END，在应用拖动时识别explorer的无标题XamlExplorerHostIslandWindow及其所在显示器顶部局部区域。仅该实际窗口允许位于黑层上方；关闭/销毁立即清除，不误报层级故障而解除遮罩，不修改真实前台应用目标。

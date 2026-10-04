@@ -42,6 +42,12 @@ class Tests {
         Check(!ButtonVisuals.CreateRegion(new Size(6,56)).IsVisible(0,0), "docked strip has rounded end");
         Check(ButtonVisuals.CreateRegion(new Size(6,56)).IsVisible(3,28), "docked strip center hit target");
         Check(ButtonVisuals.Alpha(false)==230 && ButtonVisuals.Alpha(true)==153, "90 and 60 percent opacity");
+        Rectangle monitor=new Rectangle(-1920,-200,1920,1080),bar=new Rectangle(-1920,-200,1920,360);
+        Check(SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",true,true,bar,monitor),"top snap bar is allowed during app drag");
+        Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",false,true,bar,monitor),"ordinary app cannot impersonate snap bar");
+        Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",true,false,bar,monitor),"unrelated shell host outside drag is not snap bar");
+        Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",true,true,monitor,monitor),"full screen shell host is not top snap bar");
+        Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","Task View",true,true,bar,monitor),"task view is not snap bar");
         Console.WriteLine("TOTAL " + count + " passed");
     }
 }

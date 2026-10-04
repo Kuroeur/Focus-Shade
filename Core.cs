@@ -19,6 +19,11 @@ namespace FocusShade {
         }
     }
     public static class SwitcherPolicy {
+        public static bool IsSnapBar(string className,string title,bool shellProcess,bool moving,Rectangle bounds,Rectangle monitor) {
+            return moving && shellProcess && className=="XamlExplorerHostIslandWindow" && String.IsNullOrEmpty(title)
+                && bounds.Top==monitor.Top && bounds.Height>0 && bounds.Height<monitor.Height
+                && bounds.Width>=monitor.Width*3/4 && bounds.Left>=monitor.Left && bounds.Right<=monitor.Right;
+        }
         public static bool MaskDuringAltTab(bool enabled) { return enabled; }
         public static bool ForegroundShellView(string className,bool shellProcess) {
             return shellProcess && (className=="XamlExplorerHostIslandWindow" || className=="MultitaskingViewFrame" || className=="TaskSwitcherWnd" || className=="TaskView");

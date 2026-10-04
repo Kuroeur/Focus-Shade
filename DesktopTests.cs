@@ -60,6 +60,7 @@ internal static class DesktopTests {
     using(var intruder=new Form { Text="FocusShade background layer test",Bounds=new Rectangle(1200,300,100,100) }) {
      intruder.Show(); Native.SetWindowPos(intruder.Handle,Native.TOPMOST,0,0,0,0,0x13); Pump(50);
      Check(!layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"detect background window reasserting topmost");
+     Check(layers.StackCorrect(mask.Handle,button.Handle,app.Handle,new HashSet<IntPtr>{intruder.Handle}),"recognized snap surface preserves app and opaque mask layers");
      mask.Raise(); layers.InvalidateStack(); layers.KeepAbove(app.Handle); layers.KeepAbove(existing.Handle); button.Raise();
      Check(layers.StackCorrect(mask.Handle,button.Handle,app.Handle),"repair background topmost ordering");
     }

@@ -11,6 +11,7 @@ Windows 11 桌面专注遮罩工具，WinForms / Win32，.NET Framework 4.x，x6
 - 紧急解除快捷键自动避开冲突。本机当前为 **Ctrl+Alt+F9**；完全退出为 **Ctrl+Alt+Shift+F12**。每次启动以同目录 `HOTKEYS.txt` 和悬停提示为准。紧急解除会展开按钮并移回可见区域。
 - Alt+Tab / Ctrl+Alt+Tab：仅系统选择面板位于黑色遮罩上方，按钮隐藏，其他显示器和面板周围保持黑色。根据实际 shell 窗口动态调整层级，不写死主显示器或面板坐标。
 - Win+Tab：任务视图位于黑色层上方，按钮隐藏；各显示器任务栏额外保持黑色并阻止点击。等真正关闭后恢复普通遮罩，而非按键松开就恢复。检测不依赖快捷键入口。
+- 将应用拖到显示器顶部时，Windows 分屏布局栏可正常显示和操作；拖动结束后保持遮罩。
 - 黑色区域会拦截鼠标操作，不会误点下面的窗口或任务栏。使用 Alt+Tab / Win+Tab 切换应用；聚焦窗口仍可操作。键盘输入仍交给当前前台应用。
 
 所有紧急键候选被占用时拒绝启动。候选按 Ctrl+Alt、Ctrl+Shift、Ctrl+Alt+Shift 尝试 F12、F8、F9、F10、F11、Pause；退出优先 Ctrl+Alt+Shift。
@@ -23,7 +24,7 @@ Windows 11 桌面专注遮罩工具，WinForms / Win32，.NET Framework 4.x，x6
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-使用系统 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`，运行25项核心测试并生成 `FocusShade.exe`。也提供 .NET Framework 4.8 的传统 Visual Studio 项目。
+使用系统 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`，运行30项核心测试并生成 `FocusShade.exe`。也提供 .NET Framework 4.8 的传统 Visual Studio 项目。
 
 原生桌面回归测试会短暂显示测试窗口与黑色遮罩，只操作自身夹具窗口；完成后自动恢复：
 

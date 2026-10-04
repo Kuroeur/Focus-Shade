@@ -26,12 +26,13 @@ namespace FocusShade {
             bool success=Native.SetWindowPos(window,anchor,0,0,0,0,0x4213); if(success) raised.Add(window); return success;
         }
         public bool Confirmed() { foreach(var h in raised) if(!Native.IsWindow(h) || (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0) return false; return true; }
-        public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target) {
+        public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target) { return StackCorrect(mask,button,target,new HashSet<IntPtr>()); }
+        public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target,HashSet<IntPtr> shellSurfaces) {
             if(!Confirmed()) return false;
             var above=new HashSet<IntPtr>(); IntPtr h=Native.GetWindow(mask,3); int limit=512;
             while(h!=IntPtr.Zero && limit-->0) {
                 above.Add(h);
-                if(h!=button && !original.ContainsKey(h) && Native.IsWindowVisible(h) && !Native.Cloaked(h)) return false;
+                if(h!=button && !original.ContainsKey(h) && !shellSurfaces.Contains(h) && Native.IsWindowVisible(h) && !Native.Cloaked(h)) return false;
                 h=Native.GetWindow(h,3);
             }
             foreach(var pair in original) if(Native.IsWindowVisible(pair.Key) && !above.Contains(pair.Key)) return false;
@@ -52,6 +53,18 @@ namespace FocusShade {
     internal enum ShellSurfaceKind { None, AltTab, TaskView }
     internal struct ShellSurface { public IntPtr Window; public ShellSurfaceKind Kind; }
     internal static class ShellWindows {
+        public static HashSet<IntPtr> SnapBars(bool moving,HashSet<IntPtr> previous) {
+            var found=new HashSet<IntPtr>();
+            Native.EnumWindows(delegate(IntPtr h,IntPtr data) {
+                if(!Native.IsWindowVisible(h) || Native.Cloaked(h) || Native.Class(h)!="XamlExplorerHostIslandWindow") return true;
+                uint pid; Native.GetWindowThreadProcessId(h,out pid); bool shell=false;
+                try { using(var p=System.Diagnostics.Process.GetProcessById((int)pid)) shell=p.ProcessName=="explorer"; } catch { }
+                var bounds=Native.Bounds(h); var monitor=System.Windows.Forms.Screen.FromRectangle(bounds).Bounds;
+                if(SwitcherPolicy.IsSnapBar(Native.Class(h),Native.Title(h),shell,moving || previous.Contains(h),bounds,monitor)) found.Add(h);
+                return true;
+            },IntPtr.Zero);
+            return found;
+        }
         public static ShellSurface Inspect(IntPtr h,ShellSurfaceKind intent) {
             if(h==IntPtr.Zero || !Native.IsWindowVisible(h) || Native.Cloaked(h)) return new ShellSurface();
             string c=Native.Class(h); if(!SwitcherPolicy.ForegroundShellView(c,true)) return new ShellSurface();
