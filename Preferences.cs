@@ -16,10 +16,10 @@ namespace FocusShade {
   }
  }
  public sealed class Preferences {
-  public int NormalOpacity=90,DockedOpacity=60;
+  public int NormalOpacity=90,DockedOpacity=60,PanelOpacity=90;
   public Shortcut Toggle=new Shortcut(3,0x79),Emergency=new Shortcut(3,0x78),Exit=new Shortcut(7,0x7B);
   public Preferences Copy() { return (Preferences)MemberwiseClone(); }
-  public string Serialize() { return "normal="+NormalOpacity+"\ndocked="+DockedOpacity+"\ntoggle="+Encode(Toggle)+"\nemergency="+Encode(Emergency)+"\nexit="+Encode(Exit)+"\n"; }
+  public string Serialize() { return "normal="+NormalOpacity+"\ndocked="+DockedOpacity+"\npanel="+PanelOpacity+"\ntoggle="+Encode(Toggle)+"\nemergency="+Encode(Emergency)+"\nexit="+Encode(Exit)+"\n"; }
   static string Encode(Shortcut key) { return key.Modifiers+":"+key.Key; }
   static Shortcut Decode(string text,Shortcut fallback) { var pieces=text.Split(':'); uint mod,key; return pieces.Length==2 && uint.TryParse(pieces[0],out mod) && uint.TryParse(pieces[1],out key) && Shortcut.IsSafe(mod,key)?new Shortcut(mod,key):fallback; }
   public static Preferences Parse(string text) {
@@ -29,6 +29,7 @@ namespace FocusShade {
     string key=line.Substring(0,split).Trim(),value=line.Substring(split+1).Trim(); int number;
     if(key=="normal" && int.TryParse(value,out number) && number>=10 && number<=100) result.NormalOpacity=number;
     if(key=="docked" && int.TryParse(value,out number) && number>=10 && number<=100) result.DockedOpacity=number;
+    if(key=="panel" && int.TryParse(value,out number) && number>=10 && number<=100) result.PanelOpacity=number;
     if(key=="toggle") result.Toggle=Decode(value,result.Toggle);
     if(key=="emergency") result.Emergency=Decode(value,result.Emergency);
     if(key=="exit") result.Exit=Decode(value,result.Exit);
@@ -37,7 +38,7 @@ namespace FocusShade {
    return result;
   }
   public string ValidationError() {
-   if(NormalOpacity<10 || NormalOpacity>100 || DockedOpacity<10 || DockedOpacity>100) return "Opacity must be between 10% and 100%.";
+   if(NormalOpacity<10 || NormalOpacity>100 || DockedOpacity<10 || DockedOpacity>100 || PanelOpacity<10 || PanelOpacity>100) return "Opacity must be between 10% and 100%.";
    if(!Shortcut.IsSafe(Toggle.Modifiers,Toggle.Key) || !Shortcut.IsSafe(Emergency.Modifiers,Emergency.Key) || !Shortcut.IsSafe(Exit.Modifiers,Exit.Key)) return "Use Ctrl or Alt with a letter, number, function key or navigation key. System switching shortcuts are reserved.";
    if(Toggle.Equals(Emergency) || Toggle.Equals(Exit) || Emergency.Equals(Exit)) return "Each shortcut must be different.";
    return null;

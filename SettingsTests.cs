@@ -7,6 +7,12 @@ class SettingsTests {
  static int Main() {
   try {
    var settings=new Preferences();
+   var panelField=typeof(Preferences).GetField("PanelOpacity");
+   Check(panelField!=null && (int)panelField.GetValue(settings)==90,"menu and settings default to 90 percent opacity");
+   panelField.SetValue(settings,77);
+   Check((int)panelField.GetValue(Preferences.Parse(settings.Serialize()))==77,"panel opacity persists independently of button opacity");
+   Check((int)panelField.GetValue(Preferences.Parse("normal=70\ndocked=50\n"))==90,"older settings retain default panel opacity");
+   panelField.SetValue(settings,9); Check(settings.ValidationError()!=null,"invalid panel opacity is rejected"); panelField.SetValue(settings,90);
    Check(settings.NormalOpacity==90 && settings.DockedOpacity==60,"default button opacities");
    Check(settings.Toggle.ToString()=="Ctrl+Alt+F10" && settings.Emergency.ToString()=="Ctrl+Alt+F9","default shortcuts");
    settings.NormalOpacity=73; settings.DockedOpacity=42; settings.Toggle=new Shortcut(6,0x77);

@@ -6,6 +6,13 @@ class Tests {
     static void Check(bool value, string name) { if (!value) throw new Exception("FAIL: " + name); count++; Console.WriteLine("PASS: " + name); }
     static void Main() { try { Run(); } catch (Exception ex) { Console.WriteLine(ex.Message); Environment.Exit(1); } }
     static void Run() {
+        var popup=typeof(Geometry).GetMethod("Popup");
+        Check(popup!=null,"popup placement supports a shared menu and settings anchor");
+        Rectangle work=new Rectangle(-1920,-200,1920,1032); Point anchor=new Point(-15,800);
+        Rectangle menu=(Rectangle)popup.Invoke(null,new object[] { anchor,new Size(180,120),work });
+        Rectangle settings=(Rectangle)popup.Invoke(null,new object[] { anchor,new Size(340,330),work });
+        Check(menu.Right==settings.Right && menu.Bottom==settings.Bottom && work.Contains(settings),"larger settings preserves bottom-right anchor on negative monitor");
+        Check(work.Contains((Rectangle)popup.Invoke(null,new object[] { new Point(-1920,-200),new Size(340,330),work })),"top-left popup stays within working area");
         Rectangle area = new Rectangle(-1920, -200, 1920, 1080), full = new Rectangle(-1920, 200, 56, 56);
         Check(Geometry.Collapsed(full, area, DockEdge.Left, 6) == new Rectangle(-1920, 200, 6, 56), "negative monitor left strip");
         Check(Geometry.Collapsed(full, area, DockEdge.Right, 6).Right == area.Right, "right edge physical coordinates");

@@ -136,10 +136,13 @@ internal static class DesktopTests {
      Check(Native.GetForegroundWindow()!=shade.Handle,"task view preparation does not focus the mask");
      controller.Emergency();
      var tray=(NotifyIcon)controllerType.GetField("tray",fields).GetValue(controller);
-     var toggleMenu=(ToolStripMenuItem)controllerType.GetField("toggleMenu",fields).GetValue(controller);
-     Check(tray.Visible && tray.ContextMenuStrip.Items.Count==3 && tray.ContextMenuStrip.Items[1].Text=="Settings" && tray.ContextMenuStrip.Items[2].Text=="Exit","English tray menu contains all requested actions");
-     toggleMenu.PerformClick(); Check(state.Enabled && toggleMenu.Text=="Turn off","tray toggle enables shade and changes action label");
-     toggleMenu.PerformClick(); Check(!state.Enabled && toggleMenu.Text=="Turn on","tray toggle disables shade and changes action label");
+     Check(tray.Visible && tray.ContextMenuStrip==null,"tray delegates to the shared themed popup rather than a separate menu");
+     controllerType.GetMethod("OpenMenu",fields).Invoke(controller,null); Pump(100);
+     var shared=(SettingsDialog)controllerType.GetField("settingsWindow",fields).GetValue(controller);
+     Check(shared!=null && !shared.IsSettings && shared.Visible,"shared right-click action opens menu before Settings");
+     shared.Close();
+     controllerType.GetMethod("Toggle",fields).Invoke(controller,null); Check(state.Enabled,"shared menu toggle can enable shade");
+     controllerType.GetMethod("Toggle",fields).Invoke(controller,null); Check(!state.Enabled,"shared menu toggle can disable shade");
      var saved=(Preferences)controllerType.GetField("preferences",fields).GetValue(controller);
      var conflicting=saved.Copy(); conflicting.Toggle=new FocusShade.Shortcut(7,0x75);
      bool reserved=Native.RegisterHotKey(fixture.Handle,900,0x4007,0x75);

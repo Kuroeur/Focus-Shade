@@ -161,8 +161,7 @@ namespace FocusShade {
         ShellSurfaceKind switchIntent,currentShellKind; IntPtr currentSelector,layerTarget; bool compositionPath,stackDirty=true; string maskMode="off";
         string emergencyKey,exitKey; readonly ToolTip tip=new ToolTip();
         Preferences preferences; SettingsDialog settingsWindow;
-        readonly NotifyIcon tray=new NotifyIcon(); readonly ContextMenuStrip trayMenu=new ContextMenuStrip();
-        readonly ToolStripMenuItem toggleMenu=new ToolStripMenuItem("Turn on"); Icon trayIcon;
+        readonly NotifyIcon tray=new NotifyIcon(); Icon trayIcon;
         sealed class Binding { public int Id; public string Role; public Shortcut Key; }
         List<Binding> bindings=new List<Binding>(); int nextBindingId=10;
         string SettingsPath { get { return Path.Combine(directory,"settings.ini"); } }
@@ -178,7 +177,7 @@ namespace FocusShade {
             this.higherElevation=higherElevation;
             this.foregroundWindow=foregroundWindow; target=foregroundWindow();
             preferences=Preferences.Load(SettingsPath);
-            button.Toggle=Toggle; button.Settings=OpenSettings; button.Changed=Queue;
+            button.Toggle=Toggle; button.Settings=OpenMenu; button.Changed=Queue;
             button.SetOpacities(preferences.NormalOpacity,preferences.DockedOpacity);
             button.Show(); button.FitDpi(); mask.CreateControl();
             try {
@@ -187,11 +186,9 @@ namespace FocusShade {
                 preferences.Toggle=RegisterInitial("Toggle",3,preferences.Toggle,new uint[] { 3,6,7 });
             } catch { foreach(var entry in bindings) Native.UnregisterHotKey(button.Handle,entry.Id); button.Dispose(); mask.Dispose(); throw; }
             UpdateShortcutHints();
-            toggleMenu.Click+=delegate { Toggle(); };
-            trayMenu.Items.Add(toggleMenu); trayMenu.Items.Add("Settings",null,delegate { OpenSettings(); }); trayMenu.Items.Add("Exit",null,delegate { ExitThread(); });
-            trayMenu.Opening+=delegate { toggleMenu.Text=Preferences.ToggleLabel(state.Enabled); };
             using(var bitmap=ButtonRenderer.Draw(new Size(32,32),button.BackColor,button.ForeColor,false,false)) { IntPtr icon=bitmap.GetHicon(); try { using(var temporary=Icon.FromHandle(icon)) trayIcon=(Icon)temporary.Clone(); } finally { Native.DestroyIcon(icon); } }
-            tray.Icon=trayIcon; tray.Text="FocusShade"; tray.ContextMenuStrip=trayMenu; tray.Visible=true;
+            tray.Icon=trayIcon; tray.Text="FocusShade"; tray.Visible=true;
+            tray.MouseUp+=delegate(object sender,MouseEventArgs e) { if(e.Button==MouseButtons.Right) OpenMenu(); };
             HotkeyFilter filter=new HotkeyFilter(this); Application.AddMessageFilter(filter); hotkeyFilter=filter;
             eventProc=OnEvent; keyProc=OnKey;
             Hook(3,0x17); Hook(0x8000,0x8004); Hook(0x800B,0x800B); Hook(0x8017,0x8018);
@@ -220,14 +217,19 @@ namespace FocusShade {
             try { File.WriteAllText(Path.Combine(directory,"HOTKEYS.txt"),"Toggle: "+preferences.Toggle+Environment.NewLine+"Emergency off: "+emergencyKey+Environment.NewLine+"Exit: "+exitKey); } catch(IOException) { } catch(UnauthorizedAccessException) { }
         }
         void Toggle() { state.Enabled=!state.Enabled; SafeUpdate(); }
-        void OpenSettings() {
+        void OpenMenu() { OpenPanel(true); }
+        void OpenSettings() { OpenPanel(false); }
+        void OpenPanel(bool menu) {
             try {
                 if(settingsWindow==null || settingsWindow.IsDisposed) {
                     var dialog=new SettingsDialog(preferences,StartupRegistration.Enabled,SavePreferences);
+                    dialog.SetMenuActions(Toggle,ExitThread); dialog.SetShadeEnabled(state.Enabled);
                     settingsWindow=dialog;
                     dialog.FormClosed+=delegate { if(settingsWindow==dialog) settingsWindow=null; compositionPath=false; stackDirty=true; Queue(); };
                 }
-                settingsWindow.ShowForUser(); compositionPath=false; stackDirty=true; Queue();
+                if(menu) settingsWindow.ShowMenu(Cursor.Position,state.Enabled,Toggle,ExitThread);
+                else settingsWindow.ShowForUser();
+                compositionPath=false; stackDirty=true; Queue();
             } catch(Exception ex) { Emergency(); settingsWindow=null; MessageBox.Show("Unable to open settings: "+ex.Message,"FocusShade"); }
         }
         string SavePreferences(Preferences next,bool startup) {
@@ -244,7 +246,7 @@ namespace FocusShade {
             catch(Exception ex) { foreach(int fresh in added) Native.UnregisterHotKey(button.Handle,fresh); if(written) try { Preferences.Save(SettingsPath,preferences); } catch { } return "Changes could not be saved: "+ex.Message; }
             foreach(var previous in bindings) { bool retained=false; foreach(var entry in proposed) if(entry.Id==previous.Id) retained=true; if(!retained) Native.UnregisterHotKey(button.Handle,previous.Id); }
             bindings=proposed; preferences=next.Copy(); UpdateShortcutHints();
-            try { button.SetOpacities(next.NormalOpacity,next.DockedOpacity); }
+            try { button.SetOpacities(next.NormalOpacity,next.DockedOpacity); if(settingsWindow!=null) settingsWindow.SetPanelOpacity(next.PanelOpacity); }
             catch(Exception) { state.Emergency(); appLayers.Dispose(); HideTaskbarMasks(); mask.Hide(); return "Settings were saved, but the button could not be refreshed. Shade has been turned off."; }
             return null;
         }
@@ -331,7 +333,7 @@ namespace FocusShade {
             } else {
                 switchIntent=ShellSurfaceKind.None; currentSelector=IntPtr.Zero; currentShellKind=ShellSurfaceKind.None; checkTimer.Interval=750;
                 uint pid=0; if(foreground!=IntPtr.Zero) Native.GetWindowThreadProcessId(foreground,out pid);
-                if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && (pid!=(uint)Process.GetCurrentProcess().Id || settingsWindow!=null && foreground==settingsWindow.Handle)) target=AppWindow(foreground)?foreground:IntPtr.Zero;
+                if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
                 if(target==IntPtr.Zero) { permissionTarget=IntPtr.Zero; permissionBlocked=false; }
                 else if(permissionTarget!=target) { permissionTarget=target; permissionBlocked=AppWindow(target) && higherElevation(target); }
                 HideTaskbarMasks();
@@ -371,7 +373,8 @@ namespace FocusShade {
                     }
                 }
             }
-            toggleMenu.Text=Preferences.ToggleLabel(state.Enabled); stackDirty=false; WriteStatus(suspended,foreground);
+            if(settingsWindow!=null) settingsWindow.SetShadeEnabled(state.Enabled);
+            stackDirty=false; WriteStatus(suspended,foreground);
         }
         void HideTaskbarMasks() { foreach(var form in taskbarMasks) if(form.Visible) form.Hide(); }
         void ShowTaskbarMasks() {
@@ -402,7 +405,7 @@ namespace FocusShade {
                 appLayers.Dispose(); foreach(var form in taskbarMasks) form.Dispose(); mask.Hide(); foreach(IntPtr h in hooks) Native.UnhookWinEvent(h); if(keyboard!=IntPtr.Zero) Native.UnhookWindowsHookEx(keyboard);
                 if(hotkeyFilter!=null) Application.RemoveMessageFilter(hotkeyFilter);
                 foreach(var entry in bindings) Native.UnregisterHotKey(button.Handle,entry.Id);
-                tray.Visible=false; tray.Dispose(); trayMenu.Dispose(); if(trayIcon!=null) trayIcon.Dispose(); if(settingsWindow!=null) settingsWindow.Dispose();
+                tray.Visible=false; tray.Dispose(); if(trayIcon!=null) trayIcon.Dispose(); if(settingsWindow!=null) settingsWindow.Dispose();
                 foreach(var wait in commandWaits) wait.Unregister(null); foreach(var signal in commandSignals) signal.Dispose();
                 checkTimer.Dispose(); updateTimer.Dispose(); tip.Dispose(); mask.Dispose(); button.Dispose();
             } base.Dispose(disposing);

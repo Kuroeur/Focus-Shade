@@ -13,3 +13,7 @@ button-verification*.txt
 native-test*.txt
 settings.ini
 settings.ini.*.tmp
+settings-preview.png
+popup-settings-preview.png
+popup-test*.txt
+settings-startup-result.txt

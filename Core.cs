@@ -3,6 +3,12 @@ using System.Drawing;
 namespace FocusShade {
     public enum DockEdge { None, Left, Right, Top, Bottom }
     public static class Geometry {
+        public static Rectangle Popup(Point anchor,Size size,Rectangle work) {
+            int width=Math.Min(size.Width,work.Width),height=Math.Min(size.Height,work.Height);
+            int left=anchor.X>=work.Left+work.Width/2?anchor.X-width:anchor.X;
+            int top=anchor.Y>=work.Top+work.Height/2?anchor.Y-height:anchor.Y;
+            return new Rectangle(Math.Max(work.Left,Math.Min(work.Right-width,left)),Math.Max(work.Top,Math.Min(work.Bottom-height,top)),width,height);
+        }
         public static Rectangle Collapsed(Rectangle full, Rectangle area, DockEdge edge, int strip) {
             switch (edge) {
                 case DockEdge.Left: return new Rectangle(area.Left, full.Top, strip, full.Height);
