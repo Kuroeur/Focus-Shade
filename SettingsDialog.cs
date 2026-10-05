@@ -15,6 +15,10 @@ namespace FocusShade {
   }
  }
  internal sealed class SettingsDialog : Form {
+  sealed class MenuButton : Button {
+   public MenuButton() { SetStyle(ControlStyles.Selectable,false); TabStop=false; }
+   protected override void Select(bool directed,bool forward) { }
+  }
   readonly NumericUpDown normal=new NumericUpDown(),docked=new NumericUpDown(),panel=new NumericUpDown { Name="PanelOpacity" };
   readonly CheckBox startup=new CheckBox { Text="Start with Windows",AutoSize=true };
   readonly ShortcutBox toggle=new ShortcutBox(),emergency=new ShortcutBox(),exit=new ShortcutBox();
@@ -22,7 +26,8 @@ namespace FocusShade {
   readonly Panel host=new Panel { Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(12) };
   readonly TableLayoutPanel settingsPage=new TableLayoutPanel { AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Top,ColumnCount=2 };
   readonly FlowLayoutPanel menuPage=new FlowLayoutPanel { AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Top,FlowDirection=FlowDirection.TopDown,WrapContents=false };
-  readonly Button menuToggle=new Button(),menuSettings=new Button { Text="Settings" },menuExit=new Button { Text="Exit" };
+  readonly Button menuToggle=new MenuButton(),menuSettings=new MenuButton { Text="Settings" },menuExit=new MenuButton { Text="Exit" };
+  public Action ModeChanged;
   readonly Func<Preferences,bool,string> save;
   Action toggleAction,exitAction; Point anchor; bool positioning;
   public bool IsSettings { get; private set; }
@@ -54,7 +59,7 @@ namespace FocusShade {
    };
    buttons.Controls.Add(cancel); buttons.Controls.Add(apply); Span(settingsPage,10,buttons);
    foreach(var button in new Button[] { menuToggle,menuSettings,menuExit }) { button.AutoSize=false; button.Size=new Size(160,32); button.Margin=new Padding(0,2,0,2); button.TextAlign=ContentAlignment.MiddleLeft; menuPage.Controls.Add(button); }
-   menuToggle.Click+=delegate { var action=toggleAction; Close(); if(action!=null) action(); };
+   menuToggle.Click+=delegate { if(toggleAction!=null) toggleAction(); };
    menuSettings.Click+=delegate { ShowForUser(); };
    menuExit.Click+=delegate { var action=exitAction; Close(); if(action!=null) action(); };
    host.Controls.Add(settingsPage); host.Controls.Add(menuPage); Controls.Add(host); AcceptButton=apply; CancelButton=cancel;
@@ -63,7 +68,7 @@ namespace FocusShade {
   static void Span(TableLayoutPanel table,int row,Control control) { table.RowStyles.Add(new RowStyle(SizeType.AutoSize)); table.Controls.Add(control,0,row); table.SetColumnSpan(control,2); }
   static void AddRow(TableLayoutPanel table,int row,string text,Control field) { table.RowStyles.Add(new RowStyle(SizeType.AutoSize)); table.Controls.Add(new Label { Text=text,AutoSize=true,Anchor=AnchorStyles.Left },0,row); field.Dock=DockStyle.Fill; table.Controls.Add(field,1,row); }
   int Dips(int value) { return Math.Max(1,(int)Math.Round(value*Native.GetDpiForWindow(Handle)/96.0)); }
-  void SelectPage(bool settings) { IsSettings=settings; settingsPage.Visible=settings; menuPage.Visible=!settings; ResizePage(); }
+  void SelectPage(bool settings) { IsSettings=settings; settingsPage.Visible=settings; menuPage.Visible=!settings; ResizePage(); if(ModeChanged!=null) ModeChanged(); }
   void ResizePage() {
    if(positioning || IsDisposed) return; positioning=true;
    try {
@@ -91,18 +96,20 @@ namespace FocusShade {
    if(WindowState==FormWindowState.Minimized) WindowState=FormWindowState.Normal;
    if(!Visible) Show();
    // Hidden startup can disagree with managed Visible; explicitly reveal a requested popup.
-   if(!Native.IsWindowVisible(Handle)) Native.ShowWindow(Handle,5);
+   if(!Native.IsWindowVisible(Handle)) Native.ShowWindow(Handle,IsSettings?5:4);
    ResizePage();
-   BringToFront(); Activate();
+   if(IsSettings) { BringToFront(); Activate(); }
+   else Native.SetWindowPos(Handle,Native.TOPMOST,0,0,0,0,0x13);
   }
   public void ShowMenu(Point point,bool enabled,Action toggleAction,Action exitAction) {
    SetMenuActions(toggleAction,exitAction); anchor=point; Location=point;
-   SetShadeEnabled(enabled); SelectPage(false); Reveal(); menuToggle.Focus();
+   SetShadeEnabled(enabled); SelectPage(false); Reveal();
   }
   public void SetMenuActions(Action toggleAction,Action exitAction) { this.toggleAction=toggleAction; this.exitAction=exitAction; }
   public void SetShadeEnabled(bool enabled) { menuToggle.Text=Preferences.ToggleLabel(enabled); }
   public void ShowForUser() { SelectPage(true); Reveal(); normal.Focus(); }
   protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle|=Native.TOOLWINDOW; return p; } }
+  protected override bool ShowWithoutActivation { get { return !IsSettings; } }
   public void SetPanelOpacity(int value) { Opacity=value/100.0; }
   static Color Mix(Color a,Color b,double amount) { return Color.FromArgb((int)(a.R*(1-amount)+b.R*amount),(int)(a.G*(1-amount)+b.G*amount),(int)(a.B*(1-amount)+b.B*amount)); }
   void Theme(Control control,Color accent,Color ink) {
@@ -114,8 +121,7 @@ namespace FocusShade {
   }
   void ApplyTheme() { uint color; bool opaque; Color accent=Native.DwmGetColorizationColor(out color,out opaque)==0?ButtonVisuals.Accent(color):SystemColors.Highlight; Theme(this,accent,ButtonVisuals.Ink(accent)); message.ForeColor=ButtonVisuals.Ink(accent)==Color.White?Color.LightYellow:Color.Maroon; Invalidate(); }
   protected override void OnPaint(PaintEventArgs e) { base.OnPaint(e); using(var pen=new Pen(Mix(BackColor,ForeColor,.3))) e.Graphics.DrawRectangle(pen,0,0,Width-1,Height-1); }
-  protected override void OnDeactivate(EventArgs e) { base.OnDeactivate(e); if(!IsSettings && Visible && !IsDisposed) Close(); }
   protected override bool ProcessCmdKey(ref Message msg,Keys keyData) { if(keyData==Keys.Escape) { Close(); return true; } return base.ProcessCmdKey(ref msg,keyData); }
-  protected override void WndProc(ref Message m) { base.WndProc(ref m); if(m.Msg==0x320 || m.Msg==0x1A) ApplyTheme(); if(m.Msg==0x2E0) ResizePage(); }
+  protected override void WndProc(ref Message m) { if(m.Msg==0x21 && !IsSettings) { m.Result=new IntPtr(3); return; } base.WndProc(ref m); if(m.Msg==0x320 || m.Msg==0x1A) ApplyTheme(); if(m.Msg==0x2E0) ResizePage(); }
  }
 }

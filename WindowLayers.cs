@@ -34,15 +34,25 @@ namespace FocusShade {
         public bool Confirmed() { bool success=true; foreach(var h in raised) { if(!Native.IsWindow(h) || (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0) success=false; else settled.Add(h); } return success; }
         public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target) { return StackCorrect(mask,button,target,new HashSet<IntPtr>()); }
         public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target,HashSet<IntPtr> shellSurfaces) {
+            return StackCorrect(mask,button,target,shellSurfaces,IntPtr.Zero);
+        }
+        public bool StackCorrect(IntPtr mask,IntPtr button,IntPtr target,HashSet<IntPtr> shellSurfaces,IntPtr popup) {
             Problem=""; if(!Confirmed()) { Problem="promotion not confirmed"; return false; }
-            var above=new HashSet<IntPtr>(); IntPtr h=Native.GetWindow(mask,3); int limit=512;
+            var above=new HashSet<IntPtr>(); var ranks=new Dictionary<IntPtr,int>(); IntPtr h=Native.GetWindow(mask,3); int limit=512;
             while(h!=IntPtr.Zero && limit-->0) {
                 above.Add(h);
+                ranks[h]=ranks.Count;
                 if(h!=button && !original.ContainsKey(h) && !shellSurfaces.Contains(h) && Native.IsWindowVisible(h) && !Native.Cloaked(h)) { Problem="unexpected-above-mask="+h+" class="+Native.Class(h); return false; }
                 h=Native.GetWindow(h,3);
             }
             foreach(var pair in original) if(Native.IsWindowVisible(pair.Key) && !above.Contains(pair.Key)) { Problem="app-below-mask="+pair.Key+" class="+Native.Class(pair.Key); return false; }
-            if(!above.Contains(button)) { Problem="button-below-mask"; return false; } return true;
+            if(!above.Contains(button)) { Problem="button-below-mask"; return false; }
+            foreach(var pair in original) if(pair.Key!=popup && Native.IsWindowVisible(pair.Key) && ranks[pair.Key]>ranks[button]) { Problem="app-above-button="+pair.Key; return false; }
+            if(popup!=IntPtr.Zero && Native.IsWindowVisible(popup)) {
+                if(!ranks.ContainsKey(popup) || ranks[popup]>ranks[button]) { Problem="popup-not-below-button"; return false; }
+                foreach(var pair in original) if(pair.Key!=popup && Native.IsWindowVisible(pair.Key) && ranks[pair.Key]>ranks[popup]) { Problem="app-above-popup="+pair.Key; return false; }
+            }
+            return true;
         }
         public void Retain(HashSet<IntPtr> windows) {
             var remove=new List<IntPtr>(); foreach(var pair in original) if(!windows.Contains(pair.Key)) remove.Add(pair.Key);
@@ -59,6 +69,14 @@ namespace FocusShade {
     internal enum ShellSurfaceKind { None, AltTab, TaskView, SystemPanel }
     internal struct ShellSurface { public IntPtr Window; public ShellSurfaceKind Kind; }
     internal static class ShellWindows {
+        public static HashSet<IntPtr> TraySurfaces(System.Drawing.Point point) {
+            var result=new HashSet<IntPtr>(); var monitor=System.Windows.Forms.Screen.FromPoint(point);
+            Native.EnumWindows(delegate(IntPtr h,IntPtr p) {
+                if(Native.IsWindowVisible(h) && !Native.Cloaked(h) && IsTraySurface(h) && System.Windows.Forms.Screen.FromRectangle(Native.Bounds(h)).DeviceName==monitor.DeviceName) result.Add(h);
+                return true;
+            },IntPtr.Zero);
+            return result;
+        }
         public static bool IsTraySurface(IntPtr window) {
             string className=Native.Class(window);
             if(!SwitcherPolicy.IsTraySurface(className,"explorer")) return false;

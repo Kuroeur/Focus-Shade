@@ -193,12 +193,44 @@ internal static class DesktopTests {
       Check(state.Enabled && shade.Visible,"opening the shared menu over a shaded external app preserves enabled state");
       var menu=(SettingsDialog)type.GetField("settingsWindow",fields).GetValue(controller);
       Check(menu!=null && Native.IsWindowVisible(menu.Handle),"shared menu remains usable above the external app and shade");
+      var appBounds=Native.Bounds(h);
+      menu.ShowMenu(new Point(appBounds.Left+75,appBounds.Top+75),true,delegate { type.GetMethod("Toggle",fields).Invoke(controller,null); },delegate {});
+      Native.SetWindowPos(h,Native.TOPMOST,0,0,0,0,0x4213); Pump(300);
+      IntPtr menuHit=Native.WindowFromPoint(new Native.XY(menu.Left+20,menu.Top+20));
+      Check(state.Enabled && Native.GetAncestor(menuHit,2)==menu.Handle,"overlapping menu stays above an external app that reasserts topmost");
+      var menuButton=(Button)typeof(SettingsDialog).GetField("menuToggle",fields).GetValue(menu);
+      typeof(Button).GetMethod("OnClick",fields).Invoke(menuButton,new object[] { EventArgs.Empty }); Pump(150);
+      Check(!state.Enabled && menu.Visible && menuButton.Text=="Turn on","turning shade off leaves the same passive menu usable");
+      typeof(Button).GetMethod("OnClick",fields).Invoke(menuButton,new object[] { EventArgs.Empty }); Pump(200);
+      Check(state.Enabled && menu.Visible && menuButton.Text=="Turn off","turning shade on leaves the same passive menu above the mask");
       focus=menu.Handle; type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
       Check(state.Enabled && (IntPtr)type.GetField("target",fields).GetValue(controller)==h,"foreground popup preserves the real external application target");
       focus=Native.FindWindow("Shell_TrayWnd",null); type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
       Check(focus!=IntPtr.Zero && state.Enabled && (IntPtr)type.GetField("target",fields).GetValue(controller)==h,"real explorer taskbar foreground preserves the previous application target");
       focus=h;
-      menu.Close(); Pump(150);
+      IntPtr staleClick=System.Runtime.InteropServices.Marshal.AllocHGlobal(8);
+      try {
+       System.Runtime.InteropServices.Marshal.StructureToPtr(new Native.XY(SystemInformation.VirtualScreen.Left+1,SystemInformation.VirtualScreen.Top+1),staleClick,false);
+       type.GetMethod("OnMenuMouse",fields).Invoke(controller,new object[] { 0,new IntPtr(0x204),staleClick });
+       type.GetMethod("OpenMenu",fields).Invoke(controller,null); Pump(150);
+       Check(!menu.IsDisposed && menu.Visible,"reopening menu survives a stale outside-click close callback");
+      } finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(staleClick); }
+      Point trayPoint=new Point(Screen.PrimaryScreen.Bounds.Right-20,Screen.PrimaryScreen.Bounds.Bottom-10);
+      type.GetField("traySession",fields).SetValue(controller,true); type.GetField("trayPoint",fields).SetValue(controller,trayPoint);
+      type.GetField("compositionPath",fields).SetValue(controller,false); type.GetField("stackDirty",fields).SetValue(controller,true);
+      type.GetMethod("Update",fields).Invoke(controller,null); Pump(350);
+      IntPtr trayWindow=Native.FindWindow("Shell_TrayWnd",null); Rectangle trayBounds=Native.Bounds(trayWindow);
+      Point traySample=new Point(trayBounds.Left+trayBounds.Width/2,trayBounds.Top+trayBounds.Height/2);
+      IntPtr trayHit=Native.GetAncestor(Native.WindowFromPoint(new Native.XY(traySample.X,traySample.Y)),2);
+      Check(state.Enabled && ShellWindows.IsTraySurface(trayHit),"tray menu session keeps its real taskbar hit-testable above black mask");
+      Check((IntPtr)type.GetField("menuMouse",fields).GetValue(controller)!=IntPtr.Zero,"outside-click hook exists only for the open passive menu");
+      IntPtr outside=System.Runtime.InteropServices.Marshal.AllocHGlobal(8);
+      try {
+       System.Runtime.InteropServices.Marshal.StructureToPtr(new Native.XY(SystemInformation.VirtualScreen.Left+1,SystemInformation.VirtualScreen.Top+1),outside,false);
+       type.GetMethod("OnMenuMouse",fields).Invoke(controller,new object[] { 0,new IntPtr(0x201),outside }); Pump(350);
+      } finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(outside); }
+      Check(menu.IsDisposed && (IntPtr)type.GetField("menuMouse",fields).GetValue(controller)==IntPtr.Zero,"outside click closes passive menu and removes mouse hook");
+      Check(state.Enabled && Native.WindowFromPoint(new Native.XY(traySample.X,traySample.Y))==shade.Handle,"closing tray menu restores black taskbar coverage without turning shade off");
       state.PendingUntil=DateTime.UtcNow.AddSeconds(1); type.GetField("switchIntent",fields).SetValue(controller,ShellSurfaceKind.TaskView);
       type.GetMethod("Update",fields).Invoke(controller,null);
       var initialMonitor=Screen.FromHandle(h); var monitor=initialMonitor;

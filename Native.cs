@@ -14,6 +14,7 @@ namespace FocusShade {
         public delegate IntPtr KeyProc(int code,IntPtr wp,IntPtr lp);
         public delegate bool EnumProc(IntPtr hwnd,IntPtr param);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
         [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(XY point);
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect r);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
