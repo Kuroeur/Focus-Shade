@@ -25,6 +25,9 @@ namespace FocusShade {
         }
     }
     public static class SwitcherPolicy {
+        public static bool IsTraySurface(string className,string processName) {
+            return processName=="explorer" && (className=="Shell_TrayWnd" || className=="Shell_SecondaryTrayWnd" || className=="TopLevelWindowForOverflowXamlIsland" || className=="NotifyIconOverflowWindow");
+        }
         public static bool IsSystemPanel(string className,string processName) {
             bool host=processName=="SearchHost" || processName=="SearchApp" || processName=="SearchUI" || processName=="StartMenuExperienceHost";
             return host && (className=="Windows.UI.Core.CoreWindow" || className=="XamlExplorerHostIslandWindow" || className=="XamlExplorerHostIslandWindow_WASDK" || className=="Windows.UI.Composition.DesktopWindowContentBridge");

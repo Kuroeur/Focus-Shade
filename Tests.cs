@@ -6,6 +6,9 @@ class Tests {
     static void Check(bool value, string name) { if (!value) throw new Exception("FAIL: " + name); count++; Console.WriteLine("PASS: " + name); }
     static void Main() { try { Run(); } catch (Exception ex) { Console.WriteLine(ex.Message); Environment.Exit(1); } }
     static void Run() {
+        var tray=typeof(SwitcherPolicy).GetMethod("IsTraySurface");
+        Check(tray!=null && (bool)tray.Invoke(null,new object[] { "TopLevelWindowForOverflowXamlIsland","explorer" }),"tray overflow does not replace the real application target");
+        Check(!(bool)tray.Invoke(null,new object[] { "TopLevelWindowForOverflowXamlIsland","ordinary-app" }),"ordinary app cannot impersonate the tray overflow");
         var popup=typeof(Geometry).GetMethod("Popup");
         Check(popup!=null,"popup placement supports a shared menu and settings anchor");
         Rectangle work=new Rectangle(-1920,-200,1920,1032); Point anchor=new Point(-15,800);

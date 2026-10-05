@@ -59,6 +59,13 @@ namespace FocusShade {
     internal enum ShellSurfaceKind { None, AltTab, TaskView, SystemPanel }
     internal struct ShellSurface { public IntPtr Window; public ShellSurfaceKind Kind; }
     internal static class ShellWindows {
+        public static bool IsTraySurface(IntPtr window) {
+            string className=Native.Class(window);
+            if(!SwitcherPolicy.IsTraySurface(className,"explorer")) return false;
+            uint pid; Native.GetWindowThreadProcessId(window,out pid);
+            try { using(var process=System.Diagnostics.Process.GetProcessById((int)pid)) return SwitcherPolicy.IsTraySurface(className,process.ProcessName); }
+            catch { return false; }
+        }
         public static HashSet<IntPtr> SnapBars(bool moving,HashSet<IntPtr> previous) {
             var found=new HashSet<IntPtr>();
             if(!moving && previous.Count==0) return found;

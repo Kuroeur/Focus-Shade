@@ -176,6 +176,7 @@ namespace FocusShade {
         internal Controller(Func<IntPtr> foregroundWindow,Func<IntPtr,bool> higherElevation) {
             this.higherElevation=higherElevation;
             this.foregroundWindow=foregroundWindow; target=foregroundWindow();
+            if(ShellWindows.IsTraySurface(target)) target=IntPtr.Zero;
             preferences=Preferences.Load(SettingsPath);
             button.Toggle=Toggle; button.Settings=OpenMenu; button.Changed=Queue;
             button.SetOpacities(preferences.NormalOpacity,preferences.DockedOpacity);
@@ -333,8 +334,8 @@ namespace FocusShade {
             } else {
                 switchIntent=ShellSurfaceKind.None; currentSelector=IntPtr.Zero; currentShellKind=ShellSurfaceKind.None; checkTimer.Interval=750;
                 uint pid=0; if(foreground!=IntPtr.Zero) Native.GetWindowThreadProcessId(foreground,out pid);
-                if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
-                if(target==IntPtr.Zero) { permissionTarget=IntPtr.Zero; permissionBlocked=false; }
+                if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && !ShellWindows.IsTraySurface(foreground) && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
+                if(target==IntPtr.Zero || !AppWindow(target)) { permissionTarget=IntPtr.Zero; permissionBlocked=false; }
                 else if(permissionTarget!=target) { permissionTarget=target; permissionBlocked=AppWindow(target) && higherElevation(target); }
                 HideTaskbarMasks();
                 var stackSurfaces=new HashSet<IntPtr>(snapBars);
@@ -362,7 +363,7 @@ namespace FocusShade {
                         appLayers.Retain(visible); appLayers.Remember(visible);
                         if(changed || reorder) {
                             mask.CoverDesktop(desktop,button); lastRegion="composition|"+desktop;
-                            appLayers.InvalidateStack(); if(changed || compositionPath) promotionStarted=DateTime.UtcNow;
+                            appLayers.InvalidateStack(); promotionStarted=DateTime.UtcNow;
                         }
                         bool success=true;
                         foreach(var h in visible) if(!appLayers.KeepAbove(h,button.Handle)) success=false;

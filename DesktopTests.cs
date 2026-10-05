@@ -181,12 +181,24 @@ internal static class DesktopTests {
     try {
      IntPtr h=IntPtr.Zero; for(int i=0;i<100 && h==IntPtr.Zero;i++) { Pump(20); h=Native.FindWindow(null,"FocusShade external transition fixture"); }
      Check(h!=IntPtr.Zero,"start external task view transition fixture");
-     bool denied=false;
-     using(var controller=new Controller(delegate { return Native.FindWindow(null,"FocusShade external transition fixture"); },delegate { return denied; })) {
+     bool denied=false; IntPtr focus=h;
+     using(var controller=new Controller(delegate { return focus; },delegate { return denied; })) {
       var fields=BindingFlags.NonPublic|BindingFlags.Instance; var type=typeof(Controller);
       var state=(ShadeState)type.GetField("state",fields).GetValue(controller);
       var shade=(MaskForm)type.GetField("mask",fields).GetValue(controller);
       state.Enabled=true; type.GetMethod("Update",fields).Invoke(controller,null); Pump(150);
+      Pump(1200); DateTime menuStarted=DateTime.UtcNow;
+      type.GetMethod("OpenMenu",fields).Invoke(controller,null); Pump(1400);
+      Check((DateTime)type.GetField("promotionStarted",fields).GetValue(controller)>=menuStarted,"opening a menu starts a fresh asynchronous layer deadline");
+      Check(state.Enabled && shade.Visible,"opening the shared menu over a shaded external app preserves enabled state");
+      var menu=(SettingsDialog)type.GetField("settingsWindow",fields).GetValue(controller);
+      Check(menu!=null && Native.IsWindowVisible(menu.Handle),"shared menu remains usable above the external app and shade");
+      focus=menu.Handle; type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
+      Check(state.Enabled && (IntPtr)type.GetField("target",fields).GetValue(controller)==h,"foreground popup preserves the real external application target");
+      focus=Native.FindWindow("Shell_TrayWnd",null); type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
+      Check(focus!=IntPtr.Zero && state.Enabled && (IntPtr)type.GetField("target",fields).GetValue(controller)==h,"real explorer taskbar foreground preserves the previous application target");
+      focus=h;
+      menu.Close(); Pump(150);
       state.PendingUntil=DateTime.UtcNow.AddSeconds(1); type.GetField("switchIntent",fields).SetValue(controller,ShellSurfaceKind.TaskView);
       type.GetMethod("Update",fields).Invoke(controller,null);
       var initialMonitor=Screen.FromHandle(h); var monitor=initialMonitor;
