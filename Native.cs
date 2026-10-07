@@ -8,8 +8,20 @@ namespace FocusShade {
         public static readonly IntPtr TOPMOST = new IntPtr(-1);
         public static readonly IntPtr NOTOPMOST = new IntPtr(-2);
         [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr h,int index);
+        [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr h,int index,IntPtr value);
         [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; public Rectangle Rectangle { get { return Rectangle.FromLTRB(Left,Top,Right,Bottom); } } }
         [StructLayout(LayoutKind.Sequential)] public struct KeyData { public uint Key,Scan,Flags,Time; public IntPtr Extra; }
+        [StructLayout(LayoutKind.Sequential)] public struct GuiInfo { public uint Size,Flags; public IntPtr Active,Focus,Capture,MenuOwner,MoveSize,Caret; public Rect CaretBounds; }
+        [DllImport("user32.dll",SetLastError=true)] public static extern bool GetGUIThreadInfo(uint thread,ref GuiInfo info);
+        public static bool DragActive(IntPtr window,bool eventMoving) {
+            if(eventMoving) return true;
+            if(window==IntPtr.Zero || !IsWindow(window)) return false;
+            uint pid; uint thread=GetWindowThreadProcessId(window,out pid);
+            var info=new GuiInfo { Size=(uint)Marshal.SizeOf(typeof(GuiInfo)) };
+            if(thread==0 || !GetGUIThreadInfo(thread,ref info)) return false;
+            bool capture=info.Capture!=IntPtr.Zero && GetAncestor(info.Capture,2)==GetAncestor(window,2);
+            return SwitcherPolicy.DragActive(false,(info.Flags&2)!=0,capture,GetAsyncKeyState(1)<0);
+        }
         public delegate void WinEvent(IntPtr hook,uint ev,IntPtr hwnd,int obj,int child,uint thread,uint time);
         public delegate IntPtr KeyProc(int code,IntPtr wp,IntPtr lp);
         public delegate bool EnumProc(IntPtr hwnd,IntPtr param);

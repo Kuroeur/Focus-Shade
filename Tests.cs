@@ -52,6 +52,11 @@ class Tests {
         Check(!ButtonVisuals.CreateRegion(new Size(6,56)).IsVisible(0,0), "docked strip has rounded end");
         Check(ButtonVisuals.CreateRegion(new Size(6,56)).IsVisible(3,28), "docked strip center hit target");
         Check(ButtonVisuals.Alpha(false)==230 && ButtonVisuals.Alpha(true)==153, "90 and 60 percent opacity");
+        var dragMethod=typeof(SwitcherPolicy).GetMethod("DragActive");
+        Check(dragMethod!=null && (bool)dragMethod.Invoke(null,new object[]{false,true,false,false}),"native move loop identifies a drag before the start event arrives");
+        Check((bool)dragMethod.Invoke(null,new object[]{false,false,true,true}),"application mouse capture and held left button identify custom dragging");
+        Check(!(bool)dragMethod.Invoke(null,new object[]{false,false,false,true}),"a held mouse button alone cannot exempt a shell host");
+        Check(!(bool)dragMethod.Invoke(null,new object[]{false,false,true,false}),"released mouse capture alone cannot keep a drag active");
         Rectangle monitor=new Rectangle(-1920,-200,1920,1080),bar=new Rectangle(-1920,-200,1920,360);
         Check(SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",true,true,bar,monitor),"top snap bar is allowed during app drag");
         Check(!SwitcherPolicy.IsSnapBar("XamlExplorerHostIslandWindow","",false,true,bar,monitor),"ordinary app cannot impersonate snap bar");

@@ -25,6 +25,7 @@ namespace FocusShade {
         }
     }
     public static class SwitcherPolicy {
+        public static bool DragActive(bool eventMoving,bool nativeMoving,bool applicationCapture,bool leftDown) { return eventMoving || nativeMoving || applicationCapture && leftDown; }
         public static bool IsTraySurface(string className,string processName) {
             return processName=="explorer" && (className=="Shell_TrayWnd" || className=="Shell_SecondaryTrayWnd" || className=="TopLevelWindowForOverflowXamlIsland" || className=="NotifyIconOverflowWindow");
         }

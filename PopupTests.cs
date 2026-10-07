@@ -12,11 +12,14 @@ class PopupTests {
    Check(showMenu!=null,"menu and settings share a popup form");
    var settings=new Preferences(); typeof(Preferences).GetField("PanelOpacity").SetValue(settings,77);
    Preferences saved=null; bool toggled=false;
+   using(var focusFixture=new Form { Text="FocusShade menu focus fixture",StartPosition=FormStartPosition.Manual,Bounds=new Rectangle(200,200,250,150) })
    using(var popup=new SettingsDialog(settings,false,delegate(Preferences next,bool startup) { saved=next; return null; })) {
+    focusFixture.Show(); Native.ShowWindow(focusFixture.Handle,5); Native.SetForegroundWindow(focusFixture.Handle); Application.DoEvents();
     var area=Screen.PrimaryScreen.WorkingArea; Point anchor=new Point(area.Right-12,area.Bottom-12);
     IntPtr foreground=Native.GetForegroundWindow();
     showMenu.Invoke(popup,new object[] { anchor,false,new Action(delegate { toggled=true; }),new Action(delegate {}) }); Application.DoEvents();
-    Check(Native.GetForegroundWindow()==foreground,"opening menu does not replace native foreground focus");
+    lines.Add("Focus fixture="+focusFixture.Handle+" before="+foreground+" after="+Native.GetForegroundWindow()+" popup="+popup.Handle);
+    Check(Native.GetForegroundWindow()==foreground && foreground!=popup.Handle,"opening menu does not replace native foreground focus");
     IntPtr handle=popup.Handle; Rectangle menu=popup.Bounds; Color theme=popup.BackColor;
     Check(Native.IsWindowVisible(handle) && Math.Abs(popup.Opacity-.77)<.001,"menu uses persisted shared opacity");
     Check((Native.GetWindowLongPtr(handle,-20).ToInt64()&8)!=0,"popup stays topmost even while shade is disabled");

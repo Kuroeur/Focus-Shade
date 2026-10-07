@@ -33,7 +33,7 @@ namespace FocusShade {
   public bool IsSettings { get; private set; }
   public bool CaptureRegisteredShortcut(Shortcut key) { if(!IsSettings) return false; foreach(var box in new ShortcutBox[] { toggle,emergency,exit }) if(box.Focused) { box.Value=key; return true; } return false; }
   public SettingsDialog(Preferences current,bool startWithWindows,Func<Preferences,bool,string> save) {
-   this.save=save; anchor=Cursor.Position; Text="FocusShade Settings"; Font=new Font("Segoe UI",9.5f); FormBorderStyle=FormBorderStyle.None; ShowInTaskbar=false; TopMost=true; StartPosition=FormStartPosition.Manual; AutoScaleDimensions=new SizeF(96,96); AutoScaleMode=AutoScaleMode.Dpi; Padding=new Padding(1); Opacity=current.PanelOpacity/100.0;
+   this.save=save; anchor=Cursor.Position; Text="FocusShade Settings"; Font=new Font("Segoe UI",9.5f); FormBorderStyle=FormBorderStyle.None; ShowInTaskbar=false; StartPosition=FormStartPosition.Manual; AutoScaleDimensions=new SizeF(96,96); AutoScaleMode=AutoScaleMode.Dpi; Padding=new Padding(1); Opacity=current.PanelOpacity/100.0;
    settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
    var header=new TableLayoutPanel { ColumnCount=3,AutoSize=true,Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8) };
    header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -68,7 +68,7 @@ namespace FocusShade {
   static void Span(TableLayoutPanel table,int row,Control control) { table.RowStyles.Add(new RowStyle(SizeType.AutoSize)); table.Controls.Add(control,0,row); table.SetColumnSpan(control,2); }
   static void AddRow(TableLayoutPanel table,int row,string text,Control field) { table.RowStyles.Add(new RowStyle(SizeType.AutoSize)); table.Controls.Add(new Label { Text=text,AutoSize=true,Anchor=AnchorStyles.Left },0,row); field.Dock=DockStyle.Fill; table.Controls.Add(field,1,row); }
   int Dips(int value) { return Math.Max(1,(int)Math.Round(value*Native.GetDpiForWindow(Handle)/96.0)); }
-  void SelectPage(bool settings) { IsSettings=settings; settingsPage.Visible=settings; menuPage.Visible=!settings; ResizePage(); if(ModeChanged!=null) ModeChanged(); }
+  void SelectPage(bool settings) { IsSettings=settings; if(IsHandleCreated) { long style=Native.GetWindowLongPtr(Handle,-20).ToInt64(); Native.SetWindowLongPtr(Handle,-20,new IntPtr(settings?style&~Native.NOACTIVATE:style|Native.NOACTIVATE)); } settingsPage.Visible=settings; menuPage.Visible=!settings; ResizePage(); if(ModeChanged!=null) ModeChanged(); }
   void ResizePage() {
    if(positioning || IsDisposed) return; positioning=true;
    try {
@@ -108,8 +108,9 @@ namespace FocusShade {
   public void SetMenuActions(Action toggleAction,Action exitAction) { this.toggleAction=toggleAction; this.exitAction=exitAction; }
   public void SetShadeEnabled(bool enabled) { menuToggle.Text=Preferences.ToggleLabel(enabled); }
   public void ShowForUser() { SelectPage(true); Reveal(); normal.Focus(); }
-  protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle|=Native.TOOLWINDOW; return p; } }
+  protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle|=Native.TOOLWINDOW|8; if(!IsSettings) p.ExStyle|=Native.NOACTIVATE; return p; } }
   protected override bool ShowWithoutActivation { get { return !IsSettings; } }
+  protected override void Select(bool directed,bool forward) { if(IsSettings) base.Select(directed,forward); }
   public void SetPanelOpacity(int value) { Opacity=value/100.0; }
   static Color Mix(Color a,Color b,double amount) { return Color.FromArgb((int)(a.R*(1-amount)+b.R*amount),(int)(a.G*(1-amount)+b.G*amount),(int)(a.B*(1-amount)+b.B*amount)); }
   void Theme(Control control,Color accent,Color ink) {

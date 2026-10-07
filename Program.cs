@@ -58,6 +58,7 @@ namespace FocusShade {
         public void Raise() { if(Native.IsIconic(Handle)) Native.ShowWindow(Handle,4); Native.SetWindowPos(Handle,Native.TOPMOST,0,0,0,0,0x13); }
     }
     internal sealed class MaskForm : PassiveForm {
+        internal int CoverCount;
         public MaskForm() { Text="FocusShade Black Mask"; BackColor=Color.Black; }
         protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle|=Native.LAYERED; return p; } }
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Native.SetLayeredWindowAttributes(Handle,0,255,2); }
@@ -66,7 +67,14 @@ namespace FocusShade {
             if(Bounds!=desktop) Bounds=desktop;
             if(!Visible) Show(); if(raise) Raise();
         }
-        public void CoverDesktop(Rectangle desktop,FloatingButton button) { button.Raise(); Apply(desktop,false); if(!PlaceBelow(button.Handle)) throw new InvalidOperationException("无法恢复桌面遮罩层级"); }
+        public void CoverDesktop(Rectangle desktop,FloatingButton button) { CoverCount++; button.Raise(); Apply(desktop,false); if(!PlaceBelow(button.Handle)) throw new InvalidOperationException("无法恢复桌面遮罩层级"); }
+        public void CoverOrdinary(Rectangle desktop,IntPtr lowest) {
+            bool changed=!Visible || Native.IsIconic(Handle) || Bounds!=desktop;
+            Apply(desktop,false);
+            if((Native.GetWindowLongPtr(Handle,-20).ToInt64()&8)!=0) Native.SetWindowPos(Handle,Native.NOTOPMOST,0,0,0,0,0x213);
+            if((lowest==IntPtr.Zero || Native.GetWindow(Handle,3)!=lowest) && !PlaceBelow(lowest)) throw new InvalidOperationException("Cannot place ordinary black layer");
+            if(changed) CoverCount++;
+        }
         public bool PlaceBelow(IntPtr window) { return Native.SetWindowPos(Handle,window,0,0,0,0,0x213); }
     }
     internal sealed class FloatingButton : PassiveForm {
@@ -151,14 +159,15 @@ namespace FocusShade {
     internal sealed class Controller : ApplicationContext {
         readonly MaskForm mask=new MaskForm(); readonly FloatingButton button=new FloatingButton();
         readonly ShadeState state=new ShadeState(); readonly List<IntPtr> hooks=new List<IntPtr>();
-        readonly WindowLayers appLayers=new WindowLayers();
-        readonly List<MaskForm> taskbarMasks=new List<MaskForm>(); DateTime promotionStarted;
+        readonly OrdinaryLayers appLayers=new OrdinaryLayers();
+        DateTime layerStarted,nextLayerAttempt; IntPtr attemptTarget;
+        readonly List<MaskForm> taskbarMasks=new List<MaskForm>();
         bool moving; HashSet<IntPtr> snapBars=new HashSet<IntPtr>();
         Native.WinEvent eventProc; Native.KeyProc keyProc; IntPtr keyboard;
         readonly System.Windows.Forms.Timer checkTimer=new System.Windows.Forms.Timer { Interval=750 };
         readonly System.Windows.Forms.Timer updateTimer=new System.Windows.Forms.Timer { Interval=16 };
         IntPtr target; bool queued,disposed; string lastStatus="",lastRegion="";
-        ShellSurfaceKind switchIntent,currentShellKind; IntPtr currentSelector,layerTarget; bool compositionPath,stackDirty=true; string maskMode="off";
+        ShellSurfaceKind switchIntent,currentShellKind; IntPtr currentSelector; bool compositionPath,stackDirty=true; string maskMode="off";
         string emergencyKey,exitKey; readonly ToolTip tip=new ToolTip();
         Preferences preferences; SettingsDialog settingsWindow;
         bool traySession; Point trayPoint; Native.KeyProc menuMouseProc; IntPtr menuMouse; long panelGeneration;
@@ -229,7 +238,7 @@ namespace FocusShade {
                     var dialog=new SettingsDialog(preferences,StartupRegistration.Enabled,SavePreferences);
                     dialog.SetMenuActions(Toggle,ExitThread); dialog.SetShadeEnabled(state.Enabled);
                     settingsWindow=dialog;
-                    dialog.ModeChanged=UpdateMenuMouseWatch;
+                    dialog.ModeChanged=delegate { panelGeneration++; UpdateMenuMouseWatch(); };
                     dialog.FormClosed+=delegate { if(settingsWindow==dialog) { settingsWindow=null; traySession=false; UpdateMenuMouseWatch(); } compositionPath=false; stackDirty=true; Queue(); };
                 }
                 if(menu) settingsWindow.ShowMenu(Cursor.Position,state.Enabled,Toggle,ExitThread);
@@ -245,9 +254,9 @@ namespace FocusShade {
             if(!needed && menuMouse!=IntPtr.Zero) { Native.UnhookWindowsHookEx(menuMouse); menuMouse=IntPtr.Zero; }
         }
         IntPtr OnMenuMouse(int code,IntPtr wp,IntPtr lp) {
-            if(code>=0 && (wp.ToInt32()==0x201 || wp.ToInt32()==0x204 || wp.ToInt32()==0x207) && settingsWindow!=null && !settingsWindow.IsSettings) {
+            if(code>=0 && (wp.ToInt32()==0x201 || wp.ToInt32()==0x204 || wp.ToInt32()==0x207 || wp.ToInt32()==0x20B) && settingsWindow!=null && !settingsWindow.IsSettings) {
                 var point=(Native.XY)Marshal.PtrToStructure(lp,typeof(Native.XY)); var dialog=settingsWindow; long generation=panelGeneration;
-                if(!dialog.Bounds.Contains(point.X,point.Y)) button.BeginInvoke(new Action(delegate { if(settingsWindow==dialog && panelGeneration==generation) dialog.Close(); }));
+                if(!dialog.Bounds.Contains(point.X,point.Y)) button.BeginInvoke(new Action(delegate { if(settingsWindow==dialog && panelGeneration==generation && dialog.Visible && !dialog.IsSettings) dialog.Close(); }));
             }
             return Native.CallNextHookEx(menuMouse,code,wp,lp);
         }
@@ -266,7 +275,7 @@ namespace FocusShade {
             foreach(var previous in bindings) { bool retained=false; foreach(var entry in proposed) if(entry.Id==previous.Id) retained=true; if(!retained) Native.UnregisterHotKey(button.Handle,previous.Id); }
             bindings=proposed; preferences=next.Copy(); UpdateShortcutHints();
             try { button.SetOpacities(next.NormalOpacity,next.DockedOpacity); if(settingsWindow!=null) settingsWindow.SetPanelOpacity(next.PanelOpacity); }
-            catch(Exception) { state.Emergency(); appLayers.Dispose(); HideTaskbarMasks(); mask.Hide(); return "Settings were saved, but the button could not be refreshed. Shade has been turned off."; }
+            catch(Exception) { state.Emergency(); appLayers.Dispose(); ResetLayerWait(); HideTaskbarMasks(); mask.Hide(); return "Settings were saved, but the button could not be refreshed. Shade has been turned off."; }
             return null;
         }
         void Hotkey(int id) { foreach(var entry in bindings) if(entry.Id==id) { bool captured=settingsWindow!=null && foregroundWindow()==settingsWindow.Handle && settingsWindow.CaptureRegisteredShortcut(entry.Key); if(entry.Role=="Emergency") Emergency(); else if(!captured) { if(entry.Role=="Toggle") Toggle(); else ExitThread(); } return; } }
@@ -279,11 +288,11 @@ namespace FocusShade {
             if(ev==0xB) moving=false;
             if(ev==0x8002 && Native.Class(hwnd)=="XamlExplorerHostIslandWindow") snapBars=ShellWindows.SnapBars(moving,snapBars);
             if(ev==0x8003 && WindowEvents.IsWindowObject(obj,child)) snapBars.Remove(hwnd);
-            if(ev==0x17) appLayers.WindowRestored(hwnd);
+            
             bool desktopReorder=ev==0x8004 && child==0 && Native.Class(hwnd)=="#32769";
             if(ev==0x8004 && !desktopReorder && !WindowEvents.IsWindowObject(obj,child)) return;
-            if(ev==0x8004) appLayers.InvalidateStack();
-            if(ev==0x8018 && WindowEvents.IsWindowObject(obj,child)) appLayers.WindowRestored(hwnd);
+
+            
             if(ev==0x14 && switchIntent!=ShellSurfaceKind.TaskView) { switchIntent=ShellSurfaceKind.AltTab; state.AltSwitch=true; BeginAltTab(); }
             if(ev==0x15) { state.AltSwitch=false; state.PendingUntil=DateTime.UtcNow.AddMilliseconds(180); }
             if(ev==0x800B && hwnd!=target && Native.GetAncestor(hwnd,3)!=Native.GetAncestor(target,3)) return;
@@ -296,7 +305,7 @@ namespace FocusShade {
                 if(code>=0) {
                     var k=(Native.KeyData)Marshal.PtrToStructure(lp,typeof(Native.KeyData));
                     bool down=wp.ToInt32()==0x100 || wp.ToInt32()==0x104;
-                    if(down && k.Key==0x1B && settingsWindow!=null && !settingsWindow.IsSettings) { var dialog=settingsWindow; button.BeginInvoke(new Action(delegate { if(settingsWindow==dialog) dialog.Close(); })); return new IntPtr(1); }
+                    if(down && k.Key==0x1B && settingsWindow!=null && settingsWindow.Visible && !settingsWindow.IsSettings) { var dialog=settingsWindow; long generation=panelGeneration; button.BeginInvoke(new Action(delegate { if(settingsWindow==dialog && panelGeneration==generation && dialog.Visible && !dialog.IsSettings) dialog.Close(); })); return new IntPtr(1); }
                     if(down && k.Key==9) {
                         bool alt=(k.Flags&0x20)!=0 || Native.GetAsyncKeyState(0x12)<0;
                         bool win=Native.GetAsyncKeyState(0x5B)<0 || Native.GetAsyncKeyState(0x5C)<0;
@@ -304,18 +313,18 @@ namespace FocusShade {
                     }
                     if(!down && (k.Key==0xA4 || k.Key==0xA5 || k.Key==0x12)) { state.EndAltSwitch(DateTime.UtcNow); Queue(); }
                 }
-            } catch { state.Emergency(); appLayers.Dispose(); HideTaskbarMasks(); mask.Hide(); button.Show(); }
+            } catch { state.Emergency(); appLayers.Dispose(); ResetLayerWait(); HideTaskbarMasks(); mask.Hide(); button.Show(); }
             return Native.CallNextHookEx(keyboard,code,wp,lp);
         }
         // Rendering suspension is independent of the user's enabled state.
         // Keep the known shell HWND until it really closes, including mouse-opened Task View.
-        void Suspend() { HideTaskbarMasks(); appLayers.Dispose(); compositionPath=false; layerTarget=IntPtr.Zero; mask.Hide(); button.Hide(); checkTimer.Interval=100; lastRegion=""; }
+        void Suspend() { HideTaskbarMasks(); appLayers.Dispose(); ResetLayerWait(); compositionPath=false;  mask.Hide(); button.Hide(); checkTimer.Interval=100; lastRegion=""; }
         void BeginAltTab() {
-            appLayers.Dispose(); compositionPath=false; layerTarget=IntPtr.Zero; button.Hide(); checkTimer.Interval=100;
+            appLayers.Dispose(); ResetLayerWait(); compositionPath=false;  button.Hide(); checkTimer.Interval=100;
             // Before Windows constructs the chooser, make its backdrop black too.
             if(SwitcherPolicy.MaskDuringAltTab(state.Enabled)) {
                 Rectangle desktop=SystemInformation.VirtualScreen; string signature="alt|"+desktop;
-                if(signature!=lastRegion || !mask.Visible) { mask.Apply(desktop,false); lastRegion=signature; }
+                if(signature!=lastRegion || !mask.Visible) { mask.Apply(desktop,true); lastRegion=signature; }
             } else mask.Hide();
         }
         bool AppWindow(IntPtr h) {
@@ -324,7 +333,7 @@ namespace FocusShade {
             string c=Native.Class(h);
             return c!="Progman" && c!="WorkerW" && c!="Shell_TrayWnd" && c!="Shell_SecondaryTrayWnd" && c!="MultitaskingViewFrame" && c!="TaskSwitcherWnd";
         }
-        void SafeUpdate() { Safety.FailOpen(Update,delegate(Exception ex) { state.Emergency(); appLayers.Dispose(); compositionPath=false; HideTaskbarMasks(); mask.Hide(); button.RecoverPosition(); button.Show(); try { File.AppendAllText(Path.Combine(directory,"error.txt"),DateTime.Now+" "+ex+Environment.NewLine); } catch { } }); }
+        void SafeUpdate() { Safety.FailOpen(Update,delegate(Exception ex) { state.Emergency(); appLayers.Dispose(); ResetLayerWait(); compositionPath=false; HideTaskbarMasks(); mask.Hide(); button.RecoverPosition(); button.Show(); try { File.AppendAllText(Path.Combine(directory,"error.txt"),DateTime.Now+" "+ex+Environment.NewLine); } catch { } }); }
         void Update() {
             if(disposed) return;
             snapBars=ShellWindows.SnapBars(moving,snapBars);
@@ -356,83 +365,112 @@ namespace FocusShade {
                 if(foreground!=IntPtr.Zero && !snapBars.Contains(foreground) && !ShellWindows.IsTraySurface(foreground) && pid!=(uint)Process.GetCurrentProcess().Id) target=AppWindow(foreground)?foreground:IntPtr.Zero;
                 if(target==IntPtr.Zero || !AppWindow(target)) { permissionTarget=IntPtr.Zero; permissionBlocked=false; }
                 else if(permissionTarget!=target) { permissionTarget=target; permissionBlocked=AppWindow(target) && higherElevation(target); }
-                HideTaskbarMasks();
                 var stackSurfaces=new HashSet<IntPtr>(snapBars);
                 IntPtr popup=settingsWindow!=null && Native.IsWindowVisible(settingsWindow.Handle) && !Native.IsIconic(settingsWindow.Handle)?settingsWindow.Handle:IntPtr.Zero;
                 var traySurfaces=traySession && popup!=IntPtr.Zero?ShellWindows.TraySurfaces(trayPoint):new HashSet<IntPtr>();
                 stackSurfaces.UnionWith(traySurfaces);
                 bool buttonHidden=!button.Visible; if(buttonHidden) button.Show(); button.Active=state.Enabled;
                 if(!state.Enabled) {
-                    maskMode="off"; appLayers.Dispose(); compositionPath=false; layerTarget=IntPtr.Zero; mask.Hide(); lastRegion="";
+                    maskMode="off"; HideTaskbarMasks(); appLayers.Dispose(); ResetLayerWait(); compositionPath=false;  mask.Hide(); lastRegion="";
                     if(buttonHidden || stackDirty) button.Raise();
                     if(popup!=IntPtr.Zero && VisibleAbove(popup)!=button.Handle) { button.Raise(); Native.SetWindowPos(popup,button.Handle,0,0,0,0,0x13); }
                 } else if(permissionBlocked) {
                     // Windows denies controlling a higher-elevation application. Keep the user's
                     // enabled preference and resume automatically when an ordinary app is focused.
-                    maskMode="unsupported-elevation"; appLayers.Dispose(); compositionPath=false; layerTarget=IntPtr.Zero; mask.Hide(); lastRegion="";
+                    maskMode="unsupported-elevation"; HideTaskbarMasks(); appLayers.Dispose(); ResetLayerWait(); compositionPath=false;  mask.Hide(); lastRegion="";
                 } else {
-                    Rectangle desktop=SystemInformation.VirtualScreen;
-                    if(compositionPath && !appLayers.StackCorrect(mask.Handle,button.Handle,target,stackSurfaces,popup)) stackDirty=true;
-                    bool changed=layerTarget!=target || !mask.Visible || lastRegion!="composition|"+desktop;
-                    bool reorder=changed || stackDirty && !appLayers.StackCorrect(mask.Handle,button.Handle,target,stackSurfaces,popup);
-                    if(reorder || !compositionPath) {
-                        var visible=new HashSet<IntPtr>();
-                        if(AppWindow(target)) {
-                            visible.Add(target); IntPtr owner=Native.GetAncestor(target,3);
-                            Native.EnumWindows(delegate(IntPtr h,IntPtr p) { if(AppWindow(h) && Native.GetAncestor(h,3)==owner) visible.Add(h); return true; },IntPtr.Zero);
-                        }
-                        // A user-requested settings window remains usable even if foreground activation is denied.
-                        if(settingsWindow!=null && AppWindow(settingsWindow.Handle)) visible.Add(settingsWindow.Handle);
-                        visible.UnionWith(traySurfaces);
-                        appLayers.Retain(visible); appLayers.Remember(visible);
-                        if(changed || reorder) {
-                            mask.CoverDesktop(desktop,button); lastRegion="composition|"+desktop;
-                            appLayers.InvalidateStack(); promotionStarted=DateTime.UtcNow;
-                        }
-                        bool success=true;
-                        IntPtr anchor=button.Handle;
-                        if(popup!=IntPtr.Zero) { if(!appLayers.KeepAbove(popup,anchor)) success=false; anchor=popup; }
-                        foreach(var h in traySurfaces) { if(!appLayers.KeepAbove(h,anchor)) success=false; anchor=h; }
-                        foreach(var h in visible) if(h!=popup && !traySurfaces.Contains(h) && !appLayers.KeepAbove(h,anchor)) success=false;
-                        layerTarget=target; compositionPath=success && appLayers.StackCorrect(mask.Handle,button.Handle,target,stackSurfaces,popup);
-                        maskMode=compositionPath?"composition":"waiting-for-layer";
-                        if(!success || !compositionPath && DateTime.UtcNow>promotionStarted.AddSeconds(1)) throw new InvalidOperationException("应用窗口未能进入遮罩上方，已解除遮罩："+appLayers.Problem);
-                        if(!compositionPath) Queue();
-                    }
+                    if(target==IntPtr.Zero || !AppWindow(target)) RenderDesktop(stackSurfaces,popup); else RenderOrdinary(stackSurfaces,popup);
                 }
             }
             if(settingsWindow!=null) settingsWindow.SetShadeEnabled(state.Enabled);
             stackDirty=false; WriteStatus(suspended,foreground);
         }
+        bool OwnWindow(IntPtr h) { uint pid; Native.GetWindowThreadProcessId(h,out pid); return pid==(uint)Process.GetCurrentProcess().Id; }
+        void ResetLayerWait() { layerStarted=DateTime.MinValue; nextLayerAttempt=DateTime.MinValue; attemptTarget=target; }
+        void WaitForLayers(string mode) {
+            maskMode=mode; compositionPath=false; mask.Hide(); HideTaskbarMasks();
+            if(layerStarted==DateTime.MinValue) layerStarted=DateTime.UtcNow;
+            if(DateTime.UtcNow<layerStarted.AddMilliseconds(500)) { checkTimer.Interval=100; Queue(); }
+            else { nextLayerAttempt=DateTime.UtcNow.AddMilliseconds(750); checkTimer.Interval=750; }
+        }
+        void RenderDesktop(HashSet<IntPtr> surfaces,IntPtr popup) {
+            Rectangle desktop=SystemInformation.VirtualScreen;
+            string signature="desktop|"+desktop;
+            if(lastRegion!=signature) { appLayers.Dispose(); ResetLayerWait(); }
+            bool raise=!mask.Visible || Native.IsIconic(mask.Handle) || mask.Bounds!=desktop || (Native.GetWindowLongPtr(mask.Handle,-20).ToInt64()&8)==0;
+            if(!raise) for(IntPtr h=Native.GetWindow(mask.Handle,3);h!=IntPtr.Zero;h=Native.GetWindow(h,3)) {
+                if(OwnWindow(h) || surfaces.Contains(h) || !Native.IsWindowVisible(h) || Native.IsIconic(h) || Native.Cloaked(h) || ShellWindows.IsTraySurface(h)) continue;
+                Rectangle bounds=Native.Bounds(h); if(bounds.Width>1 && bounds.Height>1) { raise=true; break; }
+            }
+            if(raise) { mask.Apply(desktop,true); button.Raise(); } else mask.Apply(desktop,false);
+            // A tray session deliberately exposes its monitor's real shell surfaces.
+            IntPtr lowestTray=IntPtr.Zero;
+            Native.EnumWindows(delegate(IntPtr h,IntPtr p) { if(surfaces.Contains(h) && ShellWindows.IsTraySurface(h)) lowestTray=h; return true; },IntPtr.Zero);
+            if(lowestTray!=IntPtr.Zero && !Above(lowestTray,mask.Handle)) mask.PlaceBelow(lowestTray);
+            ShowTaskbarMasks();
+            bool surfaceAboveButton=false,surfaceAbovePopup=false;
+            foreach(IntPtr h in surfaces) { surfaceAboveButton|=Above(h,button.Handle); if(popup!=IntPtr.Zero) surfaceAbovePopup|=Above(h,popup); }
+            if(popup!=IntPtr.Zero && (!Above(popup,mask.Handle) || TaskbarCoverAbove(popup) || surfaceAbovePopup)) Native.SetWindowPos(popup,Native.TOPMOST,0,0,0,0,0x213);
+            if(!Above(button.Handle,mask.Handle) || TaskbarCoverAbove(button.Handle) || surfaceAboveButton || popup!=IntPtr.Zero && Above(popup,button.Handle)) button.Raise();
+            compositionPath=false; maskMode="desktop"; lastRegion=signature; ResetLayerWait();
+        }
+        void RenderOrdinary(HashSet<IntPtr> surfaces,IntPtr popup) {
+            if(attemptTarget!=target) ResetLayerWait();
+            if(DateTime.UtcNow<nextLayerAttempt) return;
+            Rectangle desktop=SystemInformation.VirtualScreen;
+            var visible=new HashSet<IntPtr>();
+            if(AppWindow(target)) {
+                visible.Add(target); IntPtr owner=Native.GetAncestor(target,3);
+                Native.EnumWindows(delegate(IntPtr h,IntPtr p) { if(AppWindow(h) && Native.GetAncestor(h,3)==owner && !OwnWindow(h)) visible.Add(h); return true; },IntPtr.Zero);
+            }
+            bool dragActive=Native.DragActive(target,moving);
+            appLayers.Prepare(visible,surfaces,delegate(IntPtr h) { return AppWindow(h) && !OwnWindow(h) && !ShellWindows.IsSnapBar(h,dragActive); });
+            if(!appLayers.Ready()) { WaitForLayers("waiting-for-demotion"); return; }
+            mask.CoverOrdinary(desktop,appLayers.Lowest()); ShowTaskbarMasks(true);
+            foreach(var cover in taskbarMasks) if(cover.Visible) surfaces.Add(cover.Handle);
+            appLayers.PutBackgroundBehind(mask.Handle,delegate(IntPtr h) { return AppWindow(h) && !OwnWindow(h) && !ShellWindows.IsSnapBar(h,dragActive); });
+            if(popup!=IntPtr.Zero && TaskbarCoverAbove(popup)) Native.SetWindowPos(popup,Native.TOPMOST,0,0,0,0,0x213);
+            if(!Above(button.Handle,mask.Handle) || TaskbarCoverAbove(button.Handle)) button.Raise();
+            compositionPath=appLayers.StackCorrect(mask.Handle,button.Handle,target,surfaces,popup);
+             lastRegion="ordinary|"+desktop;
+            if(!compositionPath) { WaitForLayers("waiting-for-layer"); return; }
+            maskMode="ordinary-composition"; ResetLayerWait();
+        }
+        static bool Above(IntPtr upper,IntPtr lower) { for(IntPtr h=Native.GetWindow(lower,3);h!=IntPtr.Zero;h=Native.GetWindow(h,3)) if(h==upper) return true; return false; }
+        bool TaskbarCoverAbove(IntPtr h) { foreach(var cover in taskbarMasks) if(cover.Visible && Above(cover.Handle,h)) return true; return false; }
+        IntPtr VisiblePopup() { return settingsWindow!=null && !settingsWindow.IsDisposed && Native.IsWindowVisible(settingsWindow.Handle) && !Native.IsIconic(settingsWindow.Handle)?settingsWindow.Handle:IntPtr.Zero; }
         static IntPtr VisibleAbove(IntPtr window) { IntPtr h=Native.GetWindow(window,3); int limit=512; while(h!=IntPtr.Zero && limit-->0) { if(Native.IsWindowVisible(h) && !Native.Cloaked(h)) return h; h=Native.GetWindow(h,3); } return IntPtr.Zero; }
         void HideTaskbarMasks() { foreach(var form in taskbarMasks) if(form.Visible) form.Hide(); }
-        void ShowTaskbarMasks() {
+        void ShowTaskbarMasks(bool preserveFullscreen=false) {
+            Rectangle preserved=preserveFullscreen && AppWindow(target)?Native.Bounds(target):Rectangle.Empty;
             var rectangles=new List<Rectangle>();
+            var windows=new List<IntPtr>();
             Native.EnumWindows(delegate(IntPtr h,IntPtr p) {
                 string c=Native.Class(h); if(c!="Shell_TrayWnd" && c!="Shell_SecondaryTrayWnd") return true;
-                if(!Native.IsWindowVisible(h)) return true;
+                if(!Native.IsWindowVisible(h)) return true; if(traySession && VisiblePopup()!=IntPtr.Zero && Screen.FromHandle(h).DeviceName==Screen.FromPoint(trayPoint).DeviceName) return true;
+                if(!preserved.IsEmpty && preserved.Contains(Screen.FromHandle(h).Bounds)) return true;
                 var bounds=Native.Bounds(h);
-                if(bounds.Width>0 && bounds.Height>0) rectangles.Add(bounds); return true;
+                if(bounds.Width>0 && bounds.Height>0) { rectangles.Add(bounds); windows.Add(h); } return true;
             },IntPtr.Zero);
-            while(taskbarMasks.Count<rectangles.Count) taskbarMasks.Add(new MaskForm());
+            while(taskbarMasks.Count<rectangles.Count) taskbarMasks.Add(new MaskForm { Text="FocusShade Taskbar Mask" });
             for(int i=0;i<taskbarMasks.Count;i++) {
                 if(i<rectangles.Count) {
-                    if(!taskbarMasks[i].Visible || Native.IsIconic(taskbarMasks[i].Handle) || taskbarMasks[i].Bounds!=rectangles[i]) taskbarMasks[i].Apply(rectangles[i],true);
+                    if(!taskbarMasks[i].Visible || Native.IsIconic(taskbarMasks[i].Handle) || taskbarMasks[i].Bounds!=rectangles[i] || !Above(taskbarMasks[i].Handle,windows[i])) taskbarMasks[i].Apply(rectangles[i],true);
                 } else if(taskbarMasks[i].Visible) taskbarMasks[i].Hide();
             }
         }
         void WriteStatus(bool suspended,IntPtr foreground) {
-            string text="mode="+maskMode+" snapBars="+snapBars.Count+" moving="+moving+" composition="+compositionPath+" selector="+currentSelector+" enabled="+state.Enabled+" suspended="+suspended+" shellView="+state.ShellView+" altSwitch="+state.AltSwitch+" mask="+mask.Visible+" button="+button.Visible+" target="+target+" foreground="+foreground+" targetClass="+Native.Class(target)+" targetBounds="+Native.Bounds(target)+" buttonBounds="+button.Bounds+" paints="+button.PaintCount+" dock="+button.DockStatus+" monitors="+Screen.AllScreens.Length+" emergency="+emergencyKey+" exit="+exitKey;
+            string text="mode="+maskMode+" layerProblem="+appLayers.Problem+" snapBars="+snapBars.Count+" moving="+moving+" composition="+compositionPath+" selector="+currentSelector+" enabled="+state.Enabled+" suspended="+suspended+" shellView="+state.ShellView+" altSwitch="+state.AltSwitch+" mask="+mask.Visible+" button="+button.Visible+" target="+target+" foreground="+foreground+" targetClass="+Native.Class(target)+" targetBounds="+Native.Bounds(target)+" buttonBounds="+button.Bounds+" paints="+button.PaintCount+" dock="+button.DockStatus+" monitors="+Screen.AllScreens.Length+" emergency="+emergencyKey+" exit="+exitKey;
             if(text==lastStatus) return; lastStatus=text;
             try { File.WriteAllText(Path.Combine(directory,"status.txt"),text); File.AppendAllText(Path.Combine(directory,"events.log"),DateTime.Now.ToString("O")+" "+text+Environment.NewLine); } catch(IOException) { } catch(UnauthorizedAccessException) { }
         }
-        public void Emergency() { state.Emergency(); switchIntent=ShellSurfaceKind.None; appLayers.Dispose(); compositionPath=false; stackDirty=true; HideTaskbarMasks(); mask.Hide(); button.RecoverPosition(); SafeUpdate(); }
+        public void Emergency() { state.Emergency(); switchIntent=ShellSurfaceKind.None; appLayers.Dispose(); ResetLayerWait(); compositionPath=false; stackDirty=true; HideTaskbarMasks(); mask.Hide(); button.RecoverPosition(); SafeUpdate(); }
         protected override void ExitThreadCore() { Dispose(); base.ExitThreadCore(); }
         protected override void Dispose(bool disposing) {
             if(disposed) return; disposed=true;
             if(disposing) {
                 if(menuMouse!=IntPtr.Zero) { Native.UnhookWindowsHookEx(menuMouse); menuMouse=IntPtr.Zero; }
-                appLayers.Dispose(); foreach(var form in taskbarMasks) form.Dispose(); mask.Hide(); foreach(IntPtr h in hooks) Native.UnhookWinEvent(h); if(keyboard!=IntPtr.Zero) Native.UnhookWindowsHookEx(keyboard);
+                appLayers.Dispose(); ResetLayerWait(); foreach(var form in taskbarMasks) form.Dispose(); mask.Hide(); foreach(IntPtr h in hooks) Native.UnhookWinEvent(h); if(keyboard!=IntPtr.Zero) Native.UnhookWindowsHookEx(keyboard);
                 if(hotkeyFilter!=null) Application.RemoveMessageFilter(hotkeyFilter);
                 foreach(var entry in bindings) Native.UnregisterHotKey(button.Handle,entry.Id);
                 tray.Visible=false; tray.Dispose(); if(trayIcon!=null) trayIcon.Dispose(); if(settingsWindow!=null) settingsWindow.Dispose();

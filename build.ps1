@@ -12,18 +12,18 @@ try {
     & ./SettingsTests.exe
     if ($LASTEXITCODE -ne 0) { throw 'Settings tests failed' }
     if (Test-Path Program.cs) {
-        & $compiler /nologo /target:winexe /platform:x64 /out:FocusShade.exe /win32manifest:app.manifest /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs
+        & $compiler /nologo /target:winexe /platform:x64 /out:FocusShade.exe /win32manifest:app.manifest /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs OrdinaryLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs
         if ($LASTEXITCODE -ne 0) { throw 'Application build failed' }
     }
     if ($DesktopTests) {
-        & $compiler /nologo /target:winexe /platform:x64 /main:PopupTests /out:PopupTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs PopupTests.cs
+        & $compiler /nologo /target:winexe /platform:x64 /main:PopupTests /out:PopupTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs OrdinaryLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs PopupTests.cs
         if ($LASTEXITCODE -ne 0) { throw 'Popup test build failed' }
         $popupTest = Start-Process -FilePath (Join-Path $PSScriptRoot 'PopupTests.exe') -WindowStyle Hidden -Wait -PassThru
         Get-Content ./popup-test-results.txt
         if ($popupTest.ExitCode -ne 0) { throw 'Popup tests failed' }
-        & $compiler /nologo /target:winexe /platform:x64 /main:DesktopTests /out:SettingsStartupTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs DesktopTests.cs
+        & $compiler /nologo /target:winexe /platform:x64 /define:DESKTOP_TESTS /main:DesktopTests /out:SettingsStartupTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs OrdinaryLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs DesktopTests.cs
         if ($LASTEXITCODE -ne 0) { throw 'Settings startup test build failed' }
-        & $compiler /nologo /target:exe /platform:x64 /main:DesktopTests /out:DesktopTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs DesktopTests.cs
+        & $compiler /nologo /target:exe /platform:x64 /define:DESKTOP_TESTS /main:DesktopTests /out:DesktopTests.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Native.cs WindowLayers.cs OrdinaryLayers.cs ButtonRenderer.cs Preferences.cs SettingsDialog.cs Program.cs DesktopTests.cs
         if ($LASTEXITCODE -ne 0) { throw 'Desktop test build failed' }
         & ./DesktopTests.exe
         if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed' }

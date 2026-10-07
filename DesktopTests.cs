@@ -7,6 +7,7 @@ using System.Threading;
 using System.Windows.Forms;
 using FocusShade;
 internal static class DesktopTests {
+ [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PostMessage(IntPtr h,uint message,IntPtr wp,IntPtr lp);
  static int count; static List<string> lines=new List<string>();
  static void Check(bool ok,string name) { lines.Add((ok?"PASS ":"FAIL ")+name); if(!ok) throw new Exception(name); count++; }
  static void Pump(int ms) { DateTime until=DateTime.UtcNow.AddMilliseconds(ms); while(DateTime.UtcNow<until) { Application.DoEvents(); Thread.Sleep(10); } }
@@ -118,6 +119,19 @@ internal static class DesktopTests {
      external.Dispose(); external.Remember(new HashSet<IntPtr>{h}); external.KeepAbove(h); external.Dispose(); Pump(6500);
      Check((Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0,"pending promotion followed by original-state restore");
     }
+    Native.SetWindowPos(h,Native.TOPMOST,0,0,0,0,0x4213); Pump(2200);
+    using(var controller=new Controller(delegate { return h; })) {
+     var fields=BindingFlags.NonPublic|BindingFlags.Instance; var type=typeof(Controller);
+     var state=(ShadeState)type.GetField("state",fields).GetValue(controller);
+     var shade=(MaskForm)type.GetField("mask",fields).GetValue(controller);
+     state.Enabled=true; var clock=System.Diagnostics.Stopwatch.StartNew();
+     type.GetMethod("Update",fields).Invoke(controller,null); clock.Stop();
+     Check(clock.ElapsedMilliseconds<500,"ordinary layer demotion cannot block the command thread on a hung application");
+     Pump(650);
+     Check(state.Enabled && !shade.Visible && ((System.Windows.Forms.Timer)type.GetField("checkTimer",fields).GetValue(controller)).Interval==750 && (DateTime)type.GetField("nextLayerAttempt",fields).GetValue(controller)>DateTime.UtcNow,"unconfirmed ordinary layer backs off while retaining enabled state");
+     clock.Restart(); controller.Emergency(); clock.Stop();
+     Check(clock.ElapsedMilliseconds<500 && !state.Enabled && !shade.Visible,"emergency stays responsive during blocked ordinary layer demotion");
+    }
     if(!child.HasExited) child.Kill(); child.WaitForExit();
    }
    using(var fixture=new Form { Text="FocusShade transition fixture",Bounds=new Rectangle(300,300,300,200) }) {
@@ -140,7 +154,16 @@ internal static class DesktopTests {
      controllerType.GetMethod("OpenMenu",fields).Invoke(controller,null); Pump(100);
      var shared=(SettingsDialog)controllerType.GetField("settingsWindow",fields).GetValue(controller);
      Check(shared!=null && !shared.IsSettings && shared.Visible,"shared right-click action opens menu before Settings");
-     shared.Close();
+     IntPtr escapeData=System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.KeyData)));
+     try {
+      System.Runtime.InteropServices.Marshal.StructureToPtr(new Native.KeyData { Key=0x1B },escapeData,false);
+      var escapeResult=(IntPtr)controllerType.GetMethod("OnKey",fields).Invoke(controller,new object[] { 0,new IntPtr(0x100),escapeData });
+      shared.ShowForUser(); Pump(70);
+      Check(escapeResult==new IntPtr(1) && !shared.IsDisposed && shared.IsSettings,"queued menu Escape cannot close Settings entered before the callback");
+      controllerType.GetMethod("OpenMenu",fields).Invoke(controller,null);
+      controllerType.GetMethod("OnKey",fields).Invoke(controller,new object[] { 0,new IntPtr(0x100),escapeData }); Pump(70);
+      Check(shared.IsDisposed && controllerType.GetField("settingsWindow",fields).GetValue(controller)==null,"Escape closes the passive menu without becoming application focus");
+     } finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(escapeData); }
      controllerType.GetMethod("Toggle",fields).Invoke(controller,null); Check(state.Enabled,"shared menu toggle can enable shade");
      controllerType.GetMethod("Toggle",fields).Invoke(controller,null); Check(!state.Enabled,"shared menu toggle can disable shade");
      var saved=(Preferences)controllerType.GetField("preferences",fields).GetValue(controller);
@@ -154,8 +177,13 @@ internal static class DesktopTests {
      state.Enabled=true; controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
      var dialog=(SettingsDialog)controllerType.GetField("settingsWindow",fields).GetValue(controller);
      var controllerButton=(FloatingButton)controllerType.GetField("button",fields).GetValue(controller);
-     var controllerLayers=(WindowLayers)controllerType.GetField("appLayers",fields).GetValue(controller);
-     Check(dialog!=null && dialog.Visible && shade.Visible && Top(dialog) && controllerLayers.StackCorrect(shade.Handle,controllerButton.Handle,fixture.Handle,new HashSet<IntPtr>()),"settings window stays above active shade without foreground permission");
+     var controllerLayers=(OrdinaryLayers)controllerType.GetField("appLayers",fields).GetValue(controller);
+     bool settingsStack=(string)controllerType.GetField("maskMode",fields).GetValue(controller)=="desktop" ? Top(shade) && Native.GetAncestor(Native.WindowFromPoint(new Native.XY(dialog.Left+dialog.Width/2,dialog.Top+dialog.Height/2)),2)==dialog.Handle : controllerLayers.StackCorrect(shade.Handle,controllerButton.Handle,fixture.Handle,new HashSet<IntPtr>());
+     lines.Add("settings validation: visible="+(dialog!=null&&dialog.Visible)+" mask="+shade.Visible+" top="+(dialog!=null&&Top(dialog))+" stack="+settingsStack+" problem="+controllerLayers.Problem);
+     Check(dialog!=null && dialog.Visible && shade.Visible && Top(dialog) && settingsStack,"settings window stays above active shade without foreground permission");
+     Native.SetWindowPos(dialog.Handle,Native.TOPMOST,0,0,0,0,0x213); controllerType.GetMethod("Update",fields).Invoke(controller,null);
+     bool ballAbovePopup=false; for(IntPtr scan=Native.GetWindow(dialog.Handle,3);scan!=IntPtr.Zero;scan=Native.GetWindow(scan,3)) if(scan==controllerButton.Handle) { ballAbovePopup=true; break; }
+     Check(ballAbovePopup,"desktop popup reassertion preserves the floating button above the popup");
      dialog.Hide(); controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
      Check(dialog.Visible && Top(dialog),"Settings action restores the existing hidden dialog above shade");
      dialog.WindowState=FormWindowState.Minimized; controllerType.GetMethod("OpenSettings",fields).Invoke(controller,null); Pump(150);
@@ -181,6 +209,15 @@ internal static class DesktopTests {
     try {
      IntPtr h=IntPtr.Zero; for(int i=0;i<100 && h==IntPtr.Zero;i++) { Pump(20); h=Native.FindWindow(null,"FocusShade external transition fixture"); }
      Check(h!=IntPtr.Zero,"start external task view transition fixture");
+     var gui=new Native.GuiInfo { Size=(uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.GuiInfo)) };
+     uint fixturePid; uint fixtureThread=Native.GetWindowThreadProcessId(h,out fixturePid);
+     Check(gui.Size==72 && Native.GetGUIThreadInfo(fixtureThread,ref gui),"x64 GUI thread snapshot reads the external application without attaching input queues");
+     bool nativeDrag=false;
+     try {
+      PostMessage(h,0x112,new IntPtr(0xF010),IntPtr.Zero);
+      for(int step=0;step<35 && !nativeDrag;step++) { Pump(20); nativeDrag=Native.DragActive(h,false); }
+     } finally { PostMessage(h,0x1F,IntPtr.Zero,IntPtr.Zero); Pump(100); }
+     Check(nativeDrag,"real move loop is detected without a delivered move-start event");
      bool denied=false; IntPtr focus=h;
      using(var controller=new Controller(delegate { return focus; },delegate { return denied; })) {
       var fields=BindingFlags.NonPublic|BindingFlags.Instance; var type=typeof(Controller);
@@ -189,15 +226,17 @@ internal static class DesktopTests {
       state.Enabled=true; type.GetMethod("Update",fields).Invoke(controller,null); Pump(150);
       Pump(1200); DateTime menuStarted=DateTime.UtcNow;
       type.GetMethod("OpenMenu",fields).Invoke(controller,null); Pump(1400);
-      Check((DateTime)type.GetField("promotionStarted",fields).GetValue(controller)>=menuStarted,"opening a menu starts a fresh asynchronous layer deadline");
+      Check((Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0,"opening menu keeps the real application in its ordinary layer");
       Check(state.Enabled && shade.Visible,"opening the shared menu over a shaded external app preserves enabled state");
       var menu=(SettingsDialog)type.GetField("settingsWindow",fields).GetValue(controller);
       Check(menu!=null && Native.IsWindowVisible(menu.Handle),"shared menu remains usable above the external app and shade");
       var appBounds=Native.Bounds(h);
       menu.ShowMenu(new Point(appBounds.Left+75,appBounds.Top+75),true,delegate { type.GetMethod("Toggle",fields).Invoke(controller,null); },delegate {});
-      Native.SetWindowPos(h,Native.TOPMOST,0,0,0,0,0x4213); Pump(300);
+      int coverBefore=shade.CoverCount;
+      Native.SetWindowPos(h,IntPtr.Zero,0,0,0,0,0x4213); Pump(300);
       IntPtr menuHit=Native.WindowFromPoint(new Native.XY(menu.Left+20,menu.Top+20));
-      Check(state.Enabled && Native.GetAncestor(menuHit,2)==menu.Handle,"overlapping menu stays above an external app that reasserts topmost");
+      Check(state.Enabled && Native.GetAncestor(menuHit,2)==menu.Handle,"overlapping menu stays above an ordinary external app that reasserts its foreground order");
+      Check(shade.CoverCount==coverBefore,"repairing control priority does not raise black mask across visible application");
       var menuButton=(Button)typeof(SettingsDialog).GetField("menuToggle",fields).GetValue(menu);
       typeof(Button).GetMethod("OnClick",fields).Invoke(menuButton,new object[] { EventArgs.Empty }); Pump(150);
       Check(!state.Enabled && menu.Visible && menuButton.Text=="Turn on","turning shade off leaves the same passive menu usable");
@@ -230,7 +269,15 @@ internal static class DesktopTests {
        type.GetMethod("OnMenuMouse",fields).Invoke(controller,new object[] { 0,new IntPtr(0x201),outside }); Pump(350);
       } finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(outside); }
       Check(menu.IsDisposed && (IntPtr)type.GetField("menuMouse",fields).GetValue(controller)==IntPtr.Zero,"outside click closes passive menu and removes mouse hook");
-      Check(state.Enabled && Native.WindowFromPoint(new Native.XY(traySample.X,traySample.Y))==shade.Handle,"closing tray menu restores black taskbar coverage without turning shade off");
+      Check(state.Enabled && Pixel(traySample)==0 && Native.Class(Native.WindowFromPoint(new Native.XY(traySample.X,traySample.Y))).StartsWith("WindowsForms"),"closing tray menu restores black input-blocking taskbar coverage without turning shade off");
+      coverBefore=shade.CoverCount;
+      Native.SetWindowPos(h,IntPtr.Zero,0,0,0,0,0x13);
+      type.GetMethod("OnEvent",fields).Invoke(controller,new object[] {IntPtr.Zero,(uint)0x8004,Native.GetAncestor(h,1),0,0,(uint)0,(uint)0});
+      var controlLayers=(OrdinaryLayers)type.GetField("appLayers",fields).GetValue(controller);
+      var controlButton=(FloatingButton)type.GetField("button",fields).GetValue(controller);
+      Check(controlLayers.StackCorrect(shade.Handle,controlButton.Handle,h) && shade.CoverCount==coverBefore,"reorder event repairs overlapped button before the coalescing timer");
+      for(int click=0;click<8;click++) { Native.SetWindowPos(h,IntPtr.Zero,0,0,0,0,0x4213); Pump(80); }
+      Check(state.Enabled && shade.CoverCount==coverBefore && controlLayers.StackCorrect(shade.Handle,controlButton.Handle,h),"repeated application raises without menu preserve mask and button priority");
       state.PendingUntil=DateTime.UtcNow.AddSeconds(1); type.GetField("switchIntent",fields).SetValue(controller,ShellSurfaceKind.TaskView);
       type.GetMethod("Update",fields).Invoke(controller,null);
       var initialMonitor=Screen.FromHandle(h); var monitor=initialMonitor;
@@ -239,10 +286,37 @@ internal static class DesktopTests {
       state.PendingUntil=DateTime.MinValue; type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
       type.GetMethod("Update",fields).Invoke(controller,null); Pump(100);
       h=Native.FindWindow(null,"FocusShade external transition fixture");
-      Check(state.Enabled && shade.Visible && (Native.GetWindowLongPtr(h,-20).ToInt64()&8)!=0,"task view exit restores shading on another monitor");
+      Check(state.Enabled && shade.Visible && (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0,"task view exit restores ordinary-layer shading on another monitor");
       var bounds=Native.Bounds(h);
       Check(monitor.Bounds.Contains(bounds.Location) && (Screen.AllScreens.Length==1 || monitor.DeviceName!=initialMonitor.DeviceName),"transition fixture uses a different physical monitor when available");
       Check(Pixel(new Point(bounds.Left+50,bounds.Top+80))==0x00FF00,"resumed external application is visible above shade");
+      Rectangle windowedBounds=Native.Bounds(h); var fullScreen=Screen.FromHandle(h);
+      IntPtr windowedStyle=Native.GetWindowLongPtr(h,-16);
+      Native.SetWindowLongPtr(h,-16,new IntPtr((windowedStyle.ToInt64() & ~0x00CF0000L) | 0x80000000L));
+      Native.SetWindowPos(h,IntPtr.Zero,fullScreen.Bounds.Left,fullScreen.Bounds.Top,fullScreen.Bounds.Width,fullScreen.Bounds.Height,0x4234);
+      Native.SetForegroundWindow(h); Pump(250);
+      type.GetMethod("Update",fields).Invoke(controller,null); Pump(150);
+      var fullBounds=Native.Bounds(h); lines.Add("fullscreen fixture bounds="+fullBounds+" monitor="+fullScreen.Bounds);
+      var fullBottom=new Point(fullScreen.Bounds.Left+fullScreen.Bounds.Width/2,fullScreen.Bounds.Bottom-20);
+      IntPtr fullHit=Native.GetAncestor(Native.WindowFromPoint(new Native.XY(fullBottom.X,fullBottom.Y)),2); lines.Add("fullscreen bottom rgb="+Pixel(fullBottom).ToString("X6")+" hit="+fullHit+" class="+Native.Class(fullHit)+" title="+Native.Title(fullHit)+" actualForeground="+Native.GetForegroundWindow());
+      Native.EnumWindows(delegate(IntPtr bar,IntPtr unused) { if(Native.Class(bar)=="Shell_TrayWnd" || Native.Class(bar)=="Shell_SecondaryTrayWnd") lines.Add("bar="+bar+" bounds="+Native.Bounds(bar)+" monitor="+Screen.FromHandle(bar).DeviceName+" monitorBounds="+Screen.FromHandle(bar).Bounds); return true; },IntPtr.Zero);
+      Check(Pixel(fullBottom)==0x00FF00,"fullscreen application remains visible in the taskbar strip");
+      foreach(var otherScreen in Screen.AllScreens) if(otherScreen.DeviceName!=fullScreen.DeviceName) Check(Pixel(new Point(otherScreen.Bounds.Left+20,otherScreen.Bounds.Bottom-10))==0,"other monitor taskbar stays black during fullscreen application");
+      Native.SetWindowLongPtr(h,-16,windowedStyle); Native.SetWindowPos(h,IntPtr.Zero,windowedBounds.Left-7,windowedBounds.Top,windowedBounds.Width+14,windowedBounds.Height+7,0x4234); Pump(150);
+      type.GetMethod("Update",fields).Invoke(controller,null); Pump(150);
+      Check(Pixel(fullBottom)==0,"leaving fullscreen restores taskbar shade coverage");
+      IntPtr desktopWindow=Native.FindWindow("Progman",null);
+      Check(desktopWindow!=IntPtr.Zero,"real desktop host available for foreground-state regression");
+      bool desktopCycles=true;
+      foreach(int cycle in new int[]{0,1,2,3,4,5}) {
+       Native.ShowWindow(h,6); focus=desktopWindow; type.GetMethod("Update",fields).Invoke(controller,null); Pump(80);
+       desktopCycles &= state.Enabled && shade.Visible && (IntPtr)type.GetField("target",fields).GetValue(controller)==IntPtr.Zero;
+       if(cycle==0) Check(Top(shade),"desktop state uses an independent topmost black layer above the foreground desktop host");
+       foreach(var screen in Screen.AllScreens) { var sample=new Point(screen.Bounds.Left+20,screen.Bounds.Bottom-10);uint color=Pixel(sample);lines.Add("desktop cycle="+cycle+" monitor="+screen.DeviceName+" rgb="+color.ToString("X6")+" hit="+Native.WindowFromPoint(new Native.XY(sample.X,sample.Y)));desktopCycles &= color==0; }
+       Native.ShowWindow(h,9); focus=h; type.GetMethod("Update",fields).Invoke(controller,null); Pump(80);
+       desktopCycles &= state.Enabled && shade.Visible && (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0;
+      }
+      Check(desktopCycles,"six desktop/application cycles preserve enabled black shade and taskbars");
       var button=(FloatingButton)type.GetField("button",fields).GetValue(controller); Rectangle position=button.Bounds;
       denied=true; type.GetField("permissionTarget",fields).SetValue(controller,IntPtr.Zero); type.GetMethod("Update",fields).Invoke(controller,null); Pump(100);
       Check(state.Enabled && !shade.Visible && button.Visible && button.Bounds==position,"higher elevation suspends shade while preserving enabled state and button position");
@@ -251,6 +325,11 @@ internal static class DesktopTests {
       denied=false; type.GetField("permissionTarget",fields).SetValue(controller,IntPtr.Zero); type.GetMethod("Update",fields).Invoke(controller,null); Pump(200);
       Check(state.Enabled && shade.Visible,"return to ordinary application restores enabled shade");
       controller.Emergency(); Check(!state.Enabled && !shade.Visible,"emergency off remains available after task view resume");
+      Native.SetWindowPos(h,Native.TOPMOST,0,0,0,0,0x4213); Pump(60);
+      state.Enabled=true; type.GetMethod("Update",fields).Invoke(controller,null); Pump(150);
+      Check(state.Enabled && (Native.GetWindowLongPtr(h,-20).ToInt64()&8)==0,"an originally topmost application can enter the ordinary composition band");
+      controller.Emergency(); Pump(150);
+      Check((Native.GetWindowLongPtr(h,-20).ToInt64()&8)!=0 && !shade.Visible,"emergency restores the application's original topmost state");
      }
     } finally { if(!child.HasExited) child.Kill(); child.WaitForExit(); }
    }

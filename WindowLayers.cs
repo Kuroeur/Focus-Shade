@@ -3,6 +3,8 @@ using System.Collections.Generic;
 namespace FocusShade {
     // Keep visible app windows over an opaque mask. DWM then moves/resizes them
     // in the same composition frame, without chasing their bounds with a timer.
+#if DESKTOP_TESTS
+    // Native fixture helpers are excluded from the shipping application.
     internal sealed class WindowLayers : IDisposable {
         readonly Dictionary<IntPtr,bool> original=new Dictionary<IntPtr,bool>();
         readonly Dictionary<IntPtr,bool> restoring=new Dictionary<IntPtr,bool>();
@@ -66,6 +68,7 @@ namespace FocusShade {
         }
         public void Dispose() { Retain(new HashSet<IntPtr>()); }
     }
+#endif
     internal enum ShellSurfaceKind { None, AltTab, TaskView, SystemPanel }
     internal struct ShellSurface { public IntPtr Window; public ShellSurfaceKind Kind; }
     internal static class ShellWindows {
@@ -84,17 +87,18 @@ namespace FocusShade {
             try { using(var process=System.Diagnostics.Process.GetProcessById((int)pid)) return SwitcherPolicy.IsTraySurface(className,process.ProcessName); }
             catch { return false; }
         }
+        public static bool IsSnapBar(IntPtr h,bool dragging) {
+            if(!dragging || !Native.IsWindowVisible(h) || Native.Cloaked(h) || Native.Class(h)!="XamlExplorerHostIslandWindow") return false;
+            uint pid; Native.GetWindowThreadProcessId(h,out pid); bool shell=false;
+            try { using(var p=System.Diagnostics.Process.GetProcessById((int)pid)) shell=p.ProcessName=="explorer"; } catch { }
+            var bounds=Native.Bounds(h); var monitor=System.Windows.Forms.Screen.FromRectangle(bounds).Bounds;
+            return SwitcherPolicy.IsSnapBar(Native.Class(h),Native.Title(h),shell,true,bounds,monitor);
+        }
         public static HashSet<IntPtr> SnapBars(bool moving,HashSet<IntPtr> previous) {
+            moving=Native.DragActive(Native.GetForegroundWindow(),moving);
             var found=new HashSet<IntPtr>();
             if(!moving && previous.Count==0) return found;
-            Native.EnumWindows(delegate(IntPtr h,IntPtr data) {
-                if(!Native.IsWindowVisible(h) || Native.Cloaked(h) || Native.Class(h)!="XamlExplorerHostIslandWindow") return true;
-                uint pid; Native.GetWindowThreadProcessId(h,out pid); bool shell=false;
-                try { using(var p=System.Diagnostics.Process.GetProcessById((int)pid)) shell=p.ProcessName=="explorer"; } catch { }
-                var bounds=Native.Bounds(h); var monitor=System.Windows.Forms.Screen.FromRectangle(bounds).Bounds;
-                if(SwitcherPolicy.IsSnapBar(Native.Class(h),Native.Title(h),shell,moving || previous.Contains(h),bounds,monitor)) found.Add(h);
-                return true;
-            },IntPtr.Zero);
+            Native.EnumWindows(delegate(IntPtr h,IntPtr data) { if(IsSnapBar(h,moving || previous.Contains(h))) found.Add(h); return true; },IntPtr.Zero);
             return found;
         }
         public static ShellSurface Inspect(IntPtr h,ShellSurfaceKind intent) {
